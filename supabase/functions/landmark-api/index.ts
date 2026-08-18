@@ -15,7 +15,7 @@ const magickWasm = await Deno.readFile(
 );
 await initializeImageMagick(magickWasm);
 
-const CONTRACT_ADDRESS = "0xa9778Ef1607CCcA9Da3Dce8da9fC6a39523598ee";
+const CONTRACT_ADDRESS = "0x61C8B24da6DfB8A4C3eCb035C199114f284677eD";
 const EXPECTED_RELAYER = "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec";
 const SITE_SIGNERS = [
   "0xdc2606D6c7833178fFF3D456ADEF8d97029ea196",
@@ -571,6 +571,8 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string) {
         image: challenge.image ?? null,
         credit: challenge.credit ?? null,
         creditUrl: challenge.creditUrl ?? null,
+        sourceLabel: challenge.sourceLabel ?? null,
+        sourceUrl: challenge.sourceUrl ?? null,
         startedAt: round.started_at,
         endsAt: round.ends_at,
         selectedIndex: answer?.choice_index ?? null,

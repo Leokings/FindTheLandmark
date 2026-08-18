@@ -1,6 +1,6 @@
 # Find the Landmark
 
-A multiplayer landmark game for up to 50 players. A host creates a room, everyone gets the same image and quiz rounds, and the highest in-game XP wins.
+A 12-round multiplayer landmark game for up to 50 players. A host creates a room, everyone gets the same landmark, atlas, and GenLayer Docs rounds, and the highest in-game XP wins.
 
 GenLayer validators settle each shared round. Scores exist only inside that game.
 
@@ -23,5 +23,5 @@ gltest tests/integration/ -v -s --network studionet
 ```
 
 - [Live app](https://find-the-landmark.vercel.app/)
-- [StudioNet contract](https://explorer-studio.genlayer.com/address/0xa9778Ef1607CCcA9Da3Dce8da9fC6a39523598ee)
+- [StudioNet contract](https://explorer-studio.genlayer.com/address/0x61C8B24da6DfB8A4C3eCb035C199114f284677eD)
 - Deployment record: `deployments/studionet.json`

@@ -270,6 +270,7 @@ a:focus-visible {
   padding-top: 26px;
   display: flex;
   justify-content: space-between;
+  gap: 16px;
   border-top: 1px solid var(--line);
 }
 
@@ -597,17 +598,35 @@ a:focus-visible {
   color: var(--paper);
 }
 
-.challenge-panel h1 {
+.challenge-copy {
   margin: 18px 0 2px;
+}
+
+.challenge-copy h1 {
+  margin: 0;
   font-size: clamp(28px, 3.5vw, 52px);
   line-height: 0.94;
   letter-spacing: -0.055em;
 }
 
 .challenge-panel.quiz-panel {
-  justify-content: space-between;
   color: var(--ink);
   background: var(--coral);
+}
+
+.quiz-panel .challenge-copy {
+  margin-top: auto;
+}
+
+.round-source {
+  width: fit-content;
+  margin-bottom: 14px;
+  display: block;
+  color: inherit;
+  font: 850 10px var(--mono);
+  letter-spacing: 0.08em;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
 }
 
 .quiz-mark {
@@ -623,7 +642,7 @@ a:focus-visible {
   transform: rotate(-7deg);
 }
 
-.quiz-panel h1 {
+.quiz-panel .challenge-copy h1 {
   font-size: clamp(40px, 5.5vw, 82px);
 }
 
@@ -949,7 +968,7 @@ a:focus-visible {
     min-height: 340px;
   }
 
-  .challenge-panel h1 {
+  .challenge-copy h1 {
     font-size: 34px;
   }
 
@@ -957,7 +976,7 @@ a:focus-visible {
     min-height: 52dvh;
   }
 
-  .quiz-panel h1 {
+  .quiz-panel .challenge-copy h1 {
     font-size: 46px;
   }
 

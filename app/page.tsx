@@ -32,6 +32,8 @@ type RoundState = {
   image: string | null;
   credit: string | null;
   creditUrl: string | null;
+  sourceLabel: string | null;
+  sourceUrl: string | null;
   startedAt: string;
   endsAt: string;
   selectedIndex: number | null;
@@ -297,7 +299,7 @@ export default function Home() {
           <h1>FIND<br />THE <em>WORLD.</em></h1>
           <div className="home-stats" aria-label="Game format">
             <span><b>50</b> PLAYERS</span>
-            <span><b>08</b> ROUNDS</span>
+            <span><b>12</b> ROUNDS</span>
             <span><b>00</b> START XP</span>
           </div>
         </section>
@@ -321,7 +323,7 @@ export default function Home() {
             {error && <p className="form-error" role="alert">{error}</p>}
             <button className="primary-action" type="submit" disabled={busy}>{busy ? "WAIT…" : mode === "create" ? "MAKE LOBBY" : "ENTER ROOM"}<i>↗</i></button>
           </form>
-          <footer><span>PICTURE PICKS</span><span>ATLAS QUIZZES</span></footer>
+          <footer><span>PICTURE PICKS</span><span>ATLAS</span><span>GENLAYER DOCS</span></footer>
         </section>
       </main>
     );
@@ -365,7 +367,7 @@ export default function Home() {
       <main className="game-shell status-shell" id="top">
         <GameHeader code={game.code} onExit={leaveGame} />
         <section className="status-poster">
-          <span>{sealing ? `${game.settledRounds}/${game.roundCount}` : "00/08"}</span>
+          <span>{sealing ? `${game.settledRounds}/${game.roundCount}` : `00/${String(game.roundCount).padStart(2, "0")}`}</span>
           <h1>{sealing ? "SEALING\nSCORES" : "MAKING\nTHE BOARD"}</h1>
           <div className="status-loader"><i /></div>
         </section>
@@ -414,7 +416,7 @@ export default function Home() {
       <GameHeader code={game.code} onExit={leaveGame} />
       <div className="round-strip">
         <span>ROUND {String(game.currentRoundIndex + 1).padStart(2, "0")}/{String(game.roundCount).padStart(2, "0")}</span>
-        <b>{round?.kind === "quiz" ? "ATLAS QUIZ" : "QUICK PICK"}</b>
+        <b>{round?.sourceUrl ? "GENLAYER DOCS" : round?.kind === "quiz" ? "ATLAS QUIZ" : "QUICK PICK"}</b>
         <strong>{you?.score ?? 0} XP</strong>
       </div>
       <div className="round-layout">
@@ -428,7 +430,14 @@ export default function Home() {
           ) : (
             <div className="quiz-mark" aria-hidden="true">?</div>
           )}
-          <h1>{round?.question}</h1>
+          <div className="challenge-copy">
+            {round?.sourceUrl && (
+              <a className="round-source" href={round.sourceUrl} target="_blank" rel="noreferrer">
+                SOURCE · {round.sourceLabel ?? "GENLAYER DOCS"} ↗
+              </a>
+            )}
+            <h1>{round?.question}</h1>
+          </div>
         </section>
         <section className="answer-panel">
           <div className="timer-row">

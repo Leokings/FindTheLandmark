@@ -7,7 +7,7 @@ import re
 from urllib.parse import urlsplit
 
 
-POLICY_VERSION = "find-the-landmark.lobby-game.v1"
+POLICY_VERSION = "find-the-landmark.lobby-game.v2"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_PLAYERS = 50
 MAX_ROUNDS = 12
@@ -47,15 +47,15 @@ def _hex_digest(value: str, label: str) -> str:
     return normalized
 
 
-def _public_https_url(value: str) -> str:
-    normalized = _bounded_text(value, "Evidence URL", 12, 1_000)
+def _public_https_url(value: str, label: str = "Evidence URL") -> str:
+    normalized = _bounded_text(value, label, 12, 1_000)
     if "\\" in normalized:
-        raise gl.vm.UserError(f"{ERROR_EXPECTED} Evidence URL must not contain backslashes")
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} {label} must not contain backslashes")
     try:
         parsed = urlsplit(normalized)
         port = parsed.port
     except Exception:
-        raise gl.vm.UserError(f"{ERROR_EXPECTED} Evidence URL is invalid")
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} {label} is invalid")
     hostname = (parsed.hostname or "").lower()
     if (
         parsed.scheme != "https"
@@ -66,7 +66,7 @@ def _public_https_url(value: str) -> str:
         or (port is not None and port != 443)
     ):
         raise gl.vm.UserError(
-            f"{ERROR_EXPECTED} Evidence URL must be a public HTTPS URL without credentials or fragments"
+            f"{ERROR_EXPECTED} {label} must be a public HTTPS URL without credentials or fragments"
         )
     if (
         hostname == "localhost"
@@ -77,8 +77,17 @@ def _public_https_url(value: str) -> str:
         or hostname.startswith("10.")
         or hostname.startswith("192.168.")
     ):
-        raise gl.vm.UserError(f"{ERROR_EXPECTED} Evidence URL must not target a local network")
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} {label} must not target a local network")
     return normalized
+
+
+def _optional_bounded_text(value: str, label: str, maximum: int) -> str:
+    if not isinstance(value, str):
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} {label} must be a string")
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        return ""
+    return _bounded_text(normalized, label, 1, maximum)
 
 
 def _as_bool(value, label: str) -> bool:
@@ -153,6 +162,9 @@ def _canonical_plan(raw_plan) -> list:
             "duration_ms",
             "reward_xp",
             "speed_bonus",
+            "source_label",
+            "source_url",
+            "source_excerpt",
         }:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Game round has an invalid shape")
         kind = raw.get("kind")
@@ -175,6 +187,20 @@ def _canonical_plan(raw_plan) -> list:
         duration_ms = raw.get("duration_ms")
         reward_xp = raw.get("reward_xp")
         speed_bonus = raw.get("speed_bonus")
+        source_label = _optional_bounded_text(raw.get("source_label"), "Source label", 80)
+        source_url = _optional_bounded_text(raw.get("source_url"), "Source URL", 1_000)
+        source_excerpt = _optional_bounded_text(raw.get("source_excerpt"), "Source excerpt", 1_200)
+        source_values = (bool(source_label), bool(source_url), bool(source_excerpt))
+        if any(source_values) and not all(source_values):
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} Source label, URL, and excerpt must be supplied together"
+            )
+        if source_url:
+            source_url = _public_https_url(source_url, "Source URL")
+            if (urlsplit(source_url).hostname or "").lower() != "docs.genlayer.com":
+                raise gl.vm.UserError(f"{ERROR_EXPECTED} Quiz source must use docs.genlayer.com")
+        if kind == "identify" and any(source_values):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Image rounds cannot include a quiz source")
         for value, label, minimum, maximum in (
             (duration_ms, "Duration", 10_000, 90_000),
             (reward_xp, "Reward XP", 1, 500),
@@ -193,6 +219,9 @@ def _canonical_plan(raw_plan) -> list:
                 "duration_ms": duration_ms,
                 "reward_xp": reward_xp,
                 "speed_bonus": speed_bonus,
+                "source_label": source_label,
+                "source_url": source_url,
+                "source_excerpt": source_excerpt,
             }
         )
     return plan
@@ -495,7 +524,23 @@ Set proposal_valid true only if the visible landmark clearly matches the propose
             decision = gl.vm.run_nondet_unsafe(decide, validate)
             stored_evidence_hash = normalized_hash
         else:
-            prompt = f"""Answer one multiplayer Find the Landmark geography quiz independently.
+            if challenge["source_excerpt"]:
+                quiz_subject = "GenLayer documentation"
+                source_context = f"""OFFICIAL SOURCE
+{challenge['source_label']}
+{challenge['source_url']}
+
+FROZEN SOURCE EXCERPT
+{challenge['source_excerpt']}
+
+Use only the frozen source excerpt to answer the question.
+"""
+            else:
+                quiz_subject = "geography"
+                source_context = ""
+            prompt = f"""Answer one multiplayer Find the Landmark {quiz_subject} quiz independently.
+
+{source_context}
 
 QUESTION
 {challenge['question']}
@@ -523,7 +568,9 @@ Use index -1 and confident false only if the question is genuinely ambiguous.
                     proposed_index = leader_result["correct_index"]
                     if not leader_result["confident"] or proposed_index < 0:
                         return False
-                    audit_prompt = f"""Independently verify a proposed geography quiz answer.
+                    audit_prompt = f"""Independently verify a proposed {quiz_subject} quiz answer.
+
+{source_context}
 
 QUESTION
 {challenge['question']}

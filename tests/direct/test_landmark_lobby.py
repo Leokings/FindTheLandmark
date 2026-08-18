@@ -22,6 +22,9 @@ PLAN = [
         "duration_ms": 20_000,
         "reward_xp": 100,
         "speed_bonus": 50,
+        "source_label": "",
+        "source_url": "",
+        "source_excerpt": "",
     },
     {
         "kind": "quiz",
@@ -31,6 +34,9 @@ PLAN = [
         "duration_ms": 25_000,
         "reward_xp": 75,
         "speed_bonus": 25,
+        "source_label": "",
+        "source_url": "",
+        "source_excerpt": "",
     },
     {
         "kind": "quiz",
@@ -40,6 +46,26 @@ PLAN = [
         "duration_ms": 25_000,
         "reward_xp": 75,
         "speed_bonus": 25,
+        "source_label": "",
+        "source_url": "",
+        "source_excerpt": "",
+    },
+    {
+        "kind": "quiz",
+        "challenge_id": "genlayer-exec-prompt-001",
+        "question": "Which GenLayer function sends a prompt to an LLM?",
+        "options": [
+            "gl.nondet.web.get()",
+            "gl.nondet.exec_prompt()",
+            "gl.vm.run_nondet_unsafe()",
+            "gl.public.write",
+        ],
+        "duration_ms": 25_000,
+        "reward_xp": 75,
+        "speed_bonus": 25,
+        "source_label": "GenLayer Docs - Calling LLMs",
+        "source_url": "https://docs.genlayer.com/developers/intelligent-contracts/features/calling-llms",
+        "source_excerpt": "The guide documents gl.nondet.exec_prompt() as the function that executes an LLM prompt.",
     },
 ]
 
@@ -94,6 +120,20 @@ def mock_quiz(direct_vm, correct_index=0, confident=True):
     )
 
 
+def mock_docs_quiz(direct_vm, correct_index=1, confident=True):
+    direct_vm.mock_llm(
+        r".*Answer one multiplayer Find the Landmark GenLayer documentation quiz independently.*",
+        json.dumps({"correct_index": correct_index, "confident": confident}),
+    )
+
+
+def mock_docs_audit(direct_vm, proposal_valid=True):
+    direct_vm.mock_llm(
+        r".*Independently verify a proposed GenLayer documentation quiz answer.*",
+        json.dumps({"proposal_valid": proposal_valid}),
+    )
+
+
 def settle_image(contract, answers=None):
     return contract.settle_round(
         "game-one",
@@ -125,7 +165,7 @@ def test_relayer_registers_game_and_plan_hashes(direct_vm, direct_deploy, direct
     stored = contract.get_game("game-one")
 
     assert created["player_count"] == 2
-    assert created["round_count"] == 3
+    assert created["round_count"] == 4
     assert stored["plan_sha256"] == created["plan_sha256"]
 
 
@@ -212,6 +252,46 @@ def test_quiz_round_adds_only_per_game_xp(direct_vm, direct_deploy, direct_alice
     assert result["scores"][0]["awarded_xp"] == 87
     assert contract.get_score("game-one", PLAYER_ONE) == 237
     assert contract.get_score("game-one", PLAYER_TWO) == 0
+
+
+def test_docs_quiz_is_grounded_in_frozen_official_source(direct_vm, direct_deploy, direct_alice):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
+    register(contract)
+    mock_docs_quiz(direct_vm)
+
+    result = contract.settle_round(
+        "game-one",
+        3,
+        json.dumps(
+            [
+                {"player_hash": PLAYER_ONE, "choice_index": 1, "elapsed_ms": 5_000},
+                {"player_hash": PLAYER_TWO, "choice_index": 0, "elapsed_ms": 2_000},
+            ]
+        ),
+        "",
+        "",
+    )
+
+    assert result["correct_index"] == 1
+    assert result["scores"][0]["awarded_xp"] == 95
+    assert contract.get_score("game-one", PLAYER_ONE) == 95
+
+    direct_vm.clear_mocks()
+    mock_docs_audit(direct_vm)
+    assert direct_vm.run_validator() is True
+
+
+def test_docs_quiz_requires_complete_official_source(direct_vm, direct_deploy, direct_alice):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
+    invalid_plan = json.loads(json.dumps(PLAN))
+    invalid_plan[3]["source_excerpt"] = ""
+
+    with direct_vm.expect_revert("Source label, URL, and excerpt must be supplied together"):
+        contract.register_game(
+            "game-one",
+            json.dumps([PLAYER_ONE, PLAYER_TWO]),
+            json.dumps(invalid_plan),
+        )
 
 
 def test_answers_must_come_from_registered_players(direct_vm, direct_deploy, direct_alice):

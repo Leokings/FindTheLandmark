@@ -11,6 +11,9 @@ export type GameRound = {
   image?: string;
   credit?: string;
   creditUrl?: string;
+  sourceLabel?: string;
+  sourceUrl?: string;
+  sourceExcerpt?: string;
 };
 
 const identifyBank: readonly GameRound[] = [
@@ -124,6 +127,41 @@ const quizBank: readonly GameRound[] = [
   },
 ];
 
+const genLayerQuizBank: readonly GameRound[] = [
+  {
+    kind: "quiz", challengeId: "genlayer-exec-prompt-001", question: "Which GenLayer function sends a prompt to an LLM?",
+    options: ["gl.nondet.web.get()", "gl.nondet.exec_prompt()", "gl.vm.run_nondet_unsafe()", "gl.public.write"],
+    durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Calling LLMs", city: "GenLayer docs",
+    sourceLabel: "GenLayer Docs · Calling LLMs",
+    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/calling-llms",
+    sourceExcerpt: "The Calling LLMs guide documents gl.nondet.exec_prompt() as the function that executes an LLM prompt. It can request structured JSON by setting response_format to json.",
+  },
+  {
+    kind: "quiz", challengeId: "genlayer-image-limit-001", question: "What is the documented maximum number of images in one exec_prompt call?",
+    options: ["One", "Two", "Four", "Eight"],
+    durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Calling LLMs", city: "GenLayer docs",
+    sourceLabel: "GenLayer Docs · Calling LLMs",
+    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/calling-llms",
+    sourceExcerpt: "The Calling LLMs guide says the images parameter supports image processing and documents a maximum of two images per prompt.",
+  },
+  {
+    kind: "quiz", challengeId: "genlayer-nondet-block-001", question: "Where must gl.nondet operations execute?",
+    options: ["Inside a nondeterministic block", "Only in the constructor", "Only in view functions", "Outside the contract"],
+    durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Non-determinism", city: "GenLayer docs",
+    sourceLabel: "GenLayer Docs · Non-determinism",
+    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/non-determinism",
+    sourceExcerpt: "The Non-determinism guide says nondeterministic operations, including LLM prompts and web requests, must run inside a nondeterministic block.",
+  },
+  {
+    kind: "quiz", challengeId: "genlayer-storage-write-001", question: "Which operation must remain outside a nondeterministic block?",
+    options: ["LLM prompts", "Web requests", "Storage writes", "Validator comparisons"],
+    durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Non-determinism", city: "GenLayer docs",
+    sourceLabel: "GenLayer Docs · Non-determinism",
+    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/non-determinism",
+    sourceExcerpt: "The Non-determinism guide requires contract storage writes to happen in deterministic context outside nondeterministic blocks, after consensus is reached.",
+  },
+];
+
 function shuffled<T>(source: readonly T[]) {
   const values = [...source];
   for (let index = values.length - 1; index > 0; index -= 1) {
@@ -136,14 +174,19 @@ function shuffled<T>(source: readonly T[]) {
 export function createGamePlan(): GameRound[] {
   const landmarks = shuffled(identifyBank).slice(0, 5);
   const quizzes = shuffled(quizBank).slice(0, 3);
+  const docs = shuffled(genLayerQuizBank);
   return [
     landmarks[0],
+    docs[0],
     landmarks[1],
     quizzes[0],
+    docs[1],
     landmarks[2],
     quizzes[1],
+    docs[2],
     landmarks[3],
     quizzes[2],
+    docs[3],
     landmarks[4],
   ];
 }
@@ -157,5 +200,8 @@ export function contractPlan(plan: readonly GameRound[]) {
     duration_ms: round.durationMs,
     reward_xp: round.rewardXp,
     speed_bonus: round.speedBonus,
+    source_label: round.sourceLabel ?? "",
+    source_url: round.sourceUrl ?? "",
+    source_excerpt: round.sourceExcerpt ?? "",
   }));
 }
