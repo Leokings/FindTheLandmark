@@ -3,35 +3,13 @@
   "chainId": 61999,
   "rpcUrl": "https://studio.genlayer.com/api",
   "explorerUrl": "https://explorer-studio.genlayer.com",
-  "contractAddress": "0xE1926EdBeBC1B848b477F86b3B310B8bde9792F6",
-  "deploymentTransaction": "0x7fc25d583b26bfc255f8b8db22f5ef69889edbbd94ba972fb94949b8812e50e3",
-  "sourceSha256": "0e238188f17e419f79b4b8936cb8439f0b3d1f147ff3591efe3c6630b7a54668",
-  "policyVersion": "find-the-landmark.consensus-game.v3",
+  "contractAddress": "0xa9778Ef1607CCcA9Da3Dce8da9fC6a39523598ee",
+  "deploymentTransaction": "0xcccd297b7e83cdd93923fac95ea92a0d32c7e320a94ee8fd6fd00559b904facf",
+  "sourceSha256": "e0343c830d6456256bd26099730a88134c3d04bca1a723181e172b4d605f1ef7",
+  "policyVersion": "find-the-landmark.lobby-game.v1",
   "admin": "0x797d3b25fb2cca0ff93f60df1910267f3822d655",
   "relayer": "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec",
-  "quickPicks": [
-    { "roundId": "quick-taj-001", "rewardXp": 100, "creationTransaction": "0x3c8611407030082a124c1a715894107dbbc95cd8d0d202a902640bf0f4786675" },
-    { "roundId": "quick-redeemer-001", "rewardXp": 100, "creationTransaction": "0xb27be49a7702f45ff684c291c9e92fead4421e1a0f0766313b193f962f6a96db" },
-    { "roundId": "quick-sydney-001", "rewardXp": 100, "creationTransaction": "0xb8156cfe588515a953ca0f9a7704d8115a908d4da5a6ca16bb4e539074ee5177" },
-    { "roundId": "quick-machu-001", "rewardXp": 100, "creationTransaction": "0x0a3f1e09dcf9e37804891f30ac4ca77eaba2caa889f9dd7064cb44a563336b29" },
-    { "roundId": "quick-petra-001", "rewardXp": 100, "creationTransaction": "0x6da0da87b85a016ca21227fdefff327dc11f05cc78cb684cda07ef960901d0d3" },
-    { "roundId": "quick-liberty-001", "rewardXp": 100, "creationTransaction": "0x5e927b85634642d1e03de672fbb01fa56ea4b75b60a83e149208a2205075cabb" },
-    { "roundId": "quick-sagrada-001", "rewardXp": 100, "creationTransaction": "0xd319b9078f83cd06d26a1c824d62b21417c4f5d90dcf7eb4c64369edc140535c" },
-    { "roundId": "quick-fuji-001", "rewardXp": 100, "creationTransaction": "0x055f31e80f92408982f396aa528ec1394ef96bd5b98e0560fe14d46da4f52426" },
-    { "roundId": "quick-golden-gate-001", "rewardXp": 100, "creationTransaction": "0x1bc37e4ccafa51df210b2a51cea03f8466acb0e09af35fe028839fe5f8161b35" },
-    { "roundId": "quick-angkor-001", "rewardXp": 100, "creationTransaction": "0x02ca60f4ee86e633b163a2ebf5b7c71b0671f0beac7bfba0d6c73036b7f8f3f5" }
-  ],
-  "quizzes": [
-    { "quizId": "quiz-oldest-001", "rewardXp": 75, "creationTransaction": "0x3d4bd53c41c9d981303515693657ae6235a72898c04e09c9b141fc7218bb75bc" },
-    { "quizId": "quiz-mausoleum-001", "rewardXp": 75, "creationTransaction": "0x84604d3eb084e9220b6a8496f9f855d2f5441009ee066fb3b61be237c162b85b" },
-    { "quizId": "quiz-jordan-001", "rewardXp": 75, "creationTransaction": "0xb708a463b9ce5da282692df06d2b75a2a78a1233613b3190e8798b982f8cbdcd" },
-    { "quizId": "quiz-strait-001", "rewardXp": 75, "creationTransaction": "0x328d0cd651efe91cadf6cd8da2f0d68066619ff37fed018c475e8ab8987e9147" },
-    { "quizId": "quiz-gaudi-001", "rewardXp": 75, "creationTransaction": "0x46f5899fb4c76f9859a26ef83fc4d5c6d19c0646956d86c52ba7d85931792cd3" }
-  ],
-  "hunts": [
-    { "huntId": "hunt-colosseum-001", "rewardXp": 250, "creationTransaction": "0x68430699fa8a23574230478745cb85d27464e6d0db61edbdc1d9754b4f695989" },
-    { "huntId": "hunt-eiffel-001", "rewardXp": 250, "creationTransaction": "0x1693ae9ea700621ac4982929477f025903f2bb998584fb182f49503f941b393a" },
-    { "huntId": "hunt-pyramids-001", "rewardXp": 250, "creationTransaction": "0x4a9182c0e50fbe0373bafe99ada389c2fe49f72c49f5efb9be95ff63c5e2afba" },
-    { "huntId": "hunt-tower-bridge-001", "rewardXp": 250, "creationTransaction": "0xc2d69d09449cbdf48bceffb3176132814711e5b7054f791ba45657a533772dc2" }
-  ]
+  "maxPlayers": 50,
+  "maxRounds": 12,
+  "scoringScope": "per_game_only"
 }

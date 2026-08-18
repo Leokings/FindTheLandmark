@@ -19,12 +19,11 @@ test("server-renders the Find the Landmark game", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>Find the Landmark/);
-  assert.match(html, /PACK LIGHT/);
-  assert.match(html, /START/);
-  assert.match(html, /GENLAYER LIVE/);
-  assert.match(html, /PHOTO HUNT/);
-  assert.match(html, /QUICK PICKS/);
+  assert.match(html, /<h1>FIND<br\/>THE <em>WORLD\.<\/em><\/h1>/);
+  assert.match(html, /MAKE LOBBY/);
+  assert.match(html, /50 MAX/);
+  assert.match(html, /08.*ROUNDS/);
   assert.match(html, /ATLAS QUIZZES/);
-  assert.match(html, /07 STOPS/);
+  assert.doesNotMatch(html, /DAILY|PHOTO HUNT|GLOBAL XP/);
   assert.doesNotMatch(html, /Your site is taking shape|codex-preview/);
 });

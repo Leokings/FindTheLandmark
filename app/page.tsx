@@ -1,517 +1,454 @@
 "use client";
 
-import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
-import {
-  getDailyRoute,
-  routeNumber,
-  type IdentifyRound,
-  type QuizRound,
-  type Round,
-} from "@/lib/landmark-content";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-type Screen = "home" | "playing" | "result" | "finished";
-type ResultKind = "correct" | "wrong" | "expired" | "accepted" | "rejected" | "pending" | "closed" | "unverified";
-type VerifyState = "idle" | "preparing" | "checking";
-type AnswerTicket = {
+const SESSION_KEY = "find-the-landmark.lobby.v1";
+
+type GameStatus = "waiting" | "registering" | "running" | "verifying" | "finished" | "error";
+
+type Session = {
+  code: string;
+  displayName: string;
+  playerId: string;
+  playerToken: string;
+};
+
+type LeaderboardEntry = {
+  rank: number;
+  id: string;
+  displayName: string;
+  score: number;
+  isHost: boolean;
+  isYou: boolean;
+};
+
+type RoundState = {
+  id: string;
+  position: number;
+  status: string;
   kind: "identify" | "quiz";
-  challengeId: string;
-  runId: string;
-  userIdHash: string;
-  issuedAt: number;
-  expiresAt: number;
-  nonce: string;
-  signature: string;
-};
-type ProofResponse = {
-  status?: "accepted" | "rejected" | "pending" | "not_verified";
-  kind?: "quick_pick" | "landmark_quiz" | "photo_hunt";
-  rewardXp?: number;
-  transactionHash?: string;
-  submissionId?: string;
-  consensusStatus?: string;
-  explorerUrl?: string;
-  ticket?: AnswerTicket;
-  seconds?: number;
-  error?: string;
+  question: string;
+  options: string[];
+  image: string | null;
+  credit: string | null;
+  creditUrl: string | null;
+  startedAt: string;
+  endsAt: string;
+  selectedIndex: number | null;
 };
 
-const CONTRACT_ADDRESS = "0xE1926EdBeBC1B848b477F86b3B310B8bde9792F6";
-const EXPLORER_URL = "https://explorer-studio.genlayer.com";
+type GameState = {
+  code: string;
+  status: GameStatus;
+  isHost: boolean;
+  maxPlayers: number;
+  playerCount: number;
+  roundCount: number;
+  currentRoundIndex: number;
+  settledRounds: number;
+  pendingRounds: number;
+  currentRound: RoundState | null;
+  leaderboard: LeaderboardEntry[];
+  winner: LeaderboardEntry | null;
+  error: string | null;
+  contractAddress: string;
+};
 
-function isAnswerRound(round: Round): round is IdentifyRound | QuizRound {
-  return round.type === "identify" || round.type === "quiz";
-}
+type GameResponse = GameState & { playerToken?: string; error?: string };
 
-function challengeId(round: IdentifyRound | QuizRound) {
-  return round.type === "identify" ? round.roundId : round.quizId;
-}
+class GameRequestError extends Error {
+  status: number;
 
-function roundTime(round: Round) {
-  if (round.type === "hunt") return 90;
-  return round.type === "quiz" ? 25 : 20;
-}
-
-function timeLabel(value: number) {
-  const minutes = Math.floor(value / 60);
-  const seconds = value % 60;
-  return String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0");
-}
-
-function getPlayerId() {
-  const key = "find-the-landmark.player.v2";
-  const existing = window.localStorage.getItem(key);
-  if (existing && /^[A-Za-z0-9_-]{12,100}$/.test(existing)) return existing;
-  const created = "player-" + crypto.randomUUID();
-  window.localStorage.setItem(key, created);
-  return created;
-}
-
-function pause(milliseconds: number, signal: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    const timer = window.setTimeout(() => {
-      signal.removeEventListener("abort", abort);
-      resolve();
-    }, milliseconds);
-    const abort = () => {
-      window.clearTimeout(timer);
-      reject(new DOMException("Aborted", "AbortError"));
-    };
-    if (signal.aborted) return abort();
-    signal.addEventListener("abort", abort, { once: true });
-  });
-}
-
-async function pollVerdict(endpoint: string, initial: ProofResponse, controller: AbortController) {
-  let data = initial;
-  const deadline = Date.now() + 120_000;
-  while (data.status === "pending" && data.transactionHash && data.submissionId && Date.now() < deadline) {
-    await pause(5_000, controller.signal);
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "status", transactionHash: data.transactionHash, submissionId: data.submissionId }),
-      signal: controller.signal,
-    });
-    const update = await response.json() as ProofResponse;
-    if (update.transactionHash) data = update;
-    if (!response.ok && data.status !== "not_verified" && response.status < 500) break;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
   }
+}
+
+function storedSession(): Session | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const value = JSON.parse(localStorage.getItem(SESSION_KEY) ?? "null") as Partial<Session> | null;
+    if (
+      value
+      && typeof value.code === "string"
+      && typeof value.displayName === "string"
+      && typeof value.playerId === "string"
+      && typeof value.playerToken === "string"
+    ) return value as Session;
+  } catch {
+    localStorage.removeItem(SESSION_KEY);
+  }
+  return null;
+}
+
+async function gameRequest(
+  payload: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<GameResponse> {
+  const response = await fetch("/api/game", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+    signal,
+  });
+  const data = await response.json().catch(() => ({ error: "Bad game response." })) as GameResponse;
+  if (!response.ok) throw new GameRequestError(data.error || "Game unavailable.", response.status);
   return data;
 }
 
-function resultCopy(kind: ResultKind, round: Round) {
-  const correctBody = round.type === "quiz"
-    ? "The validators agreed. Field note sealed."
-    : `${round.place} · ${round.city}`;
-  const wrongBody = round.type === "quiz"
-    ? "The validators reached a different answer."
-    : `The validators identified ${round.place}.`;
-  const messages: Record<ResultKind, { eyebrow: string; title: string; body: string }> = {
-    correct: { eyebrow: round.type === "quiz" ? "FIELD NOTE SEALED" : "VALIDATOR SEAL EARNED", title: round.type === "quiz" ? "Sharp atlas brain." : "Correct landmark.", body: correctBody },
-    wrong: { eyebrow: "CONSENSUS SAYS NO", title: "Wrong turn.", body: wrongBody },
-    expired: { eyebrow: "GATE CLOSED", title: "Time escaped.", body: "The route moved before your answer was locked." },
-    accepted: { eyebrow: "FIRST PROOF WINS", title: "Landmark claimed.", body: "Your photo cleared validator consensus first." },
-    rejected: { eyebrow: "PROOF RETURNED", title: "Try a better image.", body: "The photo did not clear every proof check." },
-    pending: { eyebrow: "ROUTE ON HOLD", title: "Still checking.", body: "Your transaction is live and waiting for a final verdict." },
-    closed: { eyebrow: "FLAG ALREADY PLANTED", title: "Someone got there first.", body: "This daily photo hunt already has a winner." },
-    unverified: { eyebrow: "NO FINAL SEAL", title: "Couldn’t verify.", body: "No final validator seal was written, so this stop awards 0 XP." },
-  };
-  return messages[kind];
+function saveSession(session: Session | null) {
+  if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  else localStorage.removeItem(SESSION_KEY);
 }
 
-function answerLabel(round: Round) {
-  if (round.type === "identify") return "QUICK PICK";
-  if (round.type === "quiz") return "ATLAS QUIZ";
-  return "OPEN PHOTO HUNT";
+function playerId() {
+  return `player-${crypto.randomUUID()}`;
+}
+
+function Board({ entries, full = false }: { entries: LeaderboardEntry[]; full?: boolean }) {
+  return (
+    <section className={`scoreboard ${full ? "scoreboard-full" : ""}`} aria-label="Game leaderboard">
+      <header><span>GAME BOARD</span><b>XP</b></header>
+      <ol>
+        {entries.map((entry) => (
+          <li key={entry.id} className={entry.isYou ? "is-you" : ""}>
+            <span>{String(entry.rank).padStart(2, "0")}</span>
+            <strong>{entry.displayName}{entry.isYou ? " · YOU" : ""}</strong>
+            <b>{entry.score}</b>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function GameHeader({ code, onExit }: { code: string; onExit: () => void }) {
+  return (
+    <header className="game-header">
+      <button type="button" onClick={onExit} aria-label="Leave game">×</button>
+      <a href="#top" className="game-mark"><b>F/L</b><span>FIND THE LANDMARK</span></a>
+      <span className="header-code">ROOM {code}</span>
+    </header>
+  );
 }
 
 export default function Home() {
-  const [rounds] = useState<Round[]>(() => getDailyRoute());
-  const [routeCode] = useState(() => routeNumber());
-  const [screen, setScreen] = useState<Screen>("home");
-  const [roundIndex, setRoundIndex] = useState(0);
-  const [seconds, setSeconds] = useState(() => roundTime(rounds[0]));
-  const [score, setScore] = useState(0);
-  const [selected, setSelected] = useState<number | null>(null);
-  const [imageUrl, setImageUrl] = useState("");
-  const [verifyState, setVerifyState] = useState<VerifyState>("idle");
-  const [answerTicket, setAnswerTicket] = useState<AnswerTicket | null>(null);
-  const [errorMessage, setErrorMessage] = useState("");
-  const [resultKind, setResultKind] = useState<ResultKind>("correct");
-  const [earnedXp, setEarnedXp] = useState(0);
-  const [proofMeta, setProofMeta] = useState<ProofResponse | null>(null);
-  const startController = useRef<AbortController | null>(null);
-  const verifyController = useRef<AbortController | null>(null);
-  const round = rounds[roundIndex];
-  const isLastRound = roundIndex === rounds.length - 1;
-  const copy = resultCopy(resultKind, round);
-  const successful = resultKind === "correct" || resultKind === "accepted";
-  const previewRounds = rounds.filter((item): item is IdentifyRound => item.type === "identify").slice(0, 3);
+  const [mode, setMode] = useState<"create" | "join">("create");
+  const [displayName, setDisplayName] = useState("");
+  const [joinCode, setJoinCode] = useState("");
+  const [session, setSession] = useState<Session | null>(storedSession);
+  const [game, setGame] = useState<GameState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [answering, setAnswering] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [now, setNow] = useState(0);
 
-  useEffect(() => {
-    if (screen !== "playing" || !isAnswerRound(round)) return;
-    const controller = new AbortController();
-    startController.current?.abort();
-    startController.current = controller;
-    fetch("/api/answer", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "start",
-        kind: round.type,
-        challengeId: challengeId(round),
-        playerId: getPlayerId(),
-      }),
-      signal: controller.signal,
-    })
-      .then(async (response) => ({ response, data: await response.json() as ProofResponse }))
-      .then(({ response, data }) => {
-        if (!response.ok || !data.ticket) throw new Error(data.error ?? "This checkpoint could not open.");
-        setAnswerTicket(data.ticket);
-        setSeconds(data.seconds ?? roundTime(round));
-        setVerifyState("idle");
-      })
-      .catch((error) => {
-        if (!(error instanceof Error && error.name === "AbortError")) {
-          setErrorMessage(error instanceof Error ? error.message : "This checkpoint could not open.");
-          setVerifyState("idle");
-        }
-      });
-    return () => controller.abort();
-  }, [screen, roundIndex, round]);
-
-  useEffect(() => {
-    if (screen !== "playing" || seconds <= 0 || verifyState !== "idle") return;
-    if (isAnswerRound(round) && !answerTicket) return;
-    const timer = window.setTimeout(() => {
-      if (seconds === 1) {
-        setSeconds(0);
-        setEarnedXp(0);
-        setResultKind("expired");
-        setScreen("result");
-      } else setSeconds((value) => value - 1);
-    }, 1_000);
-    return () => window.clearTimeout(timer);
-  }, [screen, seconds, verifyState, answerTicket, round]);
-
-  useEffect(() => () => {
-    startController.current?.abort();
-    verifyController.current?.abort();
+  const leaveGame = useCallback(() => {
+    saveSession(null);
+    setSession(null);
+    setGame(null);
+    setError("");
+    setBusy(false);
   }, []);
 
-  function resetRound(index: number) {
-    startController.current?.abort();
-    verifyController.current?.abort();
-    setRoundIndex(index);
-    setSeconds(roundTime(rounds[index]));
-    setSelected(null);
-    setImageUrl("");
-    setAnswerTicket(null);
-    setVerifyState(isAnswerRound(rounds[index]) ? "preparing" : "idle");
-    setErrorMessage("");
-    setProofMeta(null);
-    setEarnedXp(0);
-  }
-
-  function beginRun() {
-    setScore(0);
-    resetRound(0);
-    setScreen("playing");
-  }
-
-  function leaveRun() {
-    startController.current?.abort();
-    verifyController.current?.abort();
-    setScreen("home");
-  }
-
-  async function chooseAnswer(choiceIndex: number) {
-    if (!isAnswerRound(round) || selected !== null || !answerTicket || verifyState !== "idle") return;
-    const ticket = answerTicket;
-    setSelected(choiceIndex);
-    setAnswerTicket(null);
-    setVerifyState("checking");
-    setErrorMessage("");
-    const controller = new AbortController();
-    verifyController.current?.abort();
-    verifyController.current = controller;
+  const refresh = useCallback(async (activeSession: Session, signal?: AbortSignal) => {
     try {
-      const response = await fetch("/api/answer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "submit",
-          kind: round.type,
-          challengeId: challengeId(round),
-          playerId: getPlayerId(),
-          choiceIndex,
-          ticket,
-        }),
-        signal: controller.signal,
-      });
-      let data = await response.json() as ProofResponse;
-      setProofMeta(data);
-      if (response.status === 408) {
-        setResultKind("expired");
-        setScreen("result");
+      const next = await gameRequest({
+        action: "state",
+        code: activeSession.code,
+        playerId: activeSession.playerId,
+        playerToken: activeSession.playerToken,
+      }, signal);
+      setGame(next);
+      setError("");
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") return;
+      if (caught instanceof GameRequestError && caught.status === 401) {
+        leaveGame();
         return;
       }
-      if (!response.ok && data.status !== "not_verified" && data.status !== "pending") {
-        setErrorMessage(data.error ?? "The answer could not be checked.");
-        setSelected(null);
-        return;
-      }
-      if (data.status === "pending") {
-        data = await pollVerdict("/api/answer", data, controller);
-        setProofMeta(data);
-      }
-      if (data.status === "accepted") {
-        const points = data.rewardXp ?? (round.type === "quiz" ? 75 : 100);
-        setResultKind("correct");
-        setEarnedXp(points);
-        setScore((value) => value + points);
-      } else if (data.status === "rejected") {
-        setResultKind("wrong");
-        setEarnedXp(0);
-      } else if (data.status === "pending") {
-        setResultKind("pending");
-        setEarnedXp(0);
-      } else {
-        setResultKind("unverified");
-        setEarnedXp(0);
-      }
-      setScreen("result");
-    } catch (error) {
-      if (!(error instanceof Error && error.name === "AbortError")) {
-        setErrorMessage("The validator route could not be reached. Try again.");
-        setSelected(null);
-      }
-    } finally {
-      if (verifyController.current === controller) {
-        verifyController.current = null;
-        setVerifyState("idle");
-      }
+      setError(caught instanceof Error ? caught.message : "Game unavailable.");
     }
-  }
+  }, [leaveGame]);
 
-  async function submitProof() {
-    if (round.type !== "hunt" || verifyState !== "idle") return;
-    setVerifyState("checking");
-    setErrorMessage("");
+  useEffect(() => {
+    if (!session || game) return;
     const controller = new AbortController();
-    verifyController.current?.abort();
-    verifyController.current = controller;
-    try {
-      const response = await fetch("/api/photo-hunt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ huntId: round.huntId, evidenceUrl: imageUrl, playerId: getPlayerId() }),
-        signal: controller.signal,
-      });
-      let data = await response.json() as ProofResponse;
-      setProofMeta(data);
-      if (!response.ok && response.status !== 409 && data.status !== "not_verified" && data.status !== "pending") {
-        setErrorMessage(data.error ?? "The proof could not be checked.");
-        return;
-      }
-      if (data.status === "pending") {
-        data = await pollVerdict("/api/photo-hunt", data, controller);
-        setProofMeta(data);
-      }
-      if (response.status === 409) {
-        setResultKind("closed");
-        setEarnedXp(0);
-      } else if (data.status === "accepted") {
-        const points = data.rewardXp ?? 250;
-        setResultKind("accepted");
-        setEarnedXp(points);
-        setScore((value) => value + points);
-      } else if (data.status === "rejected") {
-        setResultKind("rejected");
-        setEarnedXp(0);
-      } else if (data.status === "pending") {
-        setResultKind("pending");
-        setEarnedXp(0);
-      } else {
-        setResultKind("unverified");
-        setEarnedXp(0);
-      }
-      setScreen("result");
-    } catch (error) {
-      if (!(error instanceof Error && error.name === "AbortError")) setErrorMessage("The proof route could not be reached. Try again.");
-    } finally {
-      if (verifyController.current === controller) {
-        verifyController.current = null;
-        setVerifyState("idle");
-      }
-    }
-  }
+    const timer = window.setTimeout(() => void refresh(session, controller.signal), 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [game, refresh, session]);
 
-  function nextRound() {
-    if (isLastRound) {
-      setScreen("finished");
+  const gameStatus = game?.status;
+  useEffect(() => {
+    if (!session || !gameStatus || gameStatus === "finished" || gameStatus === "error") return;
+    let active = true;
+    let timer = 0;
+    let controller: AbortController | null = null;
+    const poll = async () => {
+      controller = new AbortController();
+      await refresh(session, controller.signal);
+      if (active) timer = window.setTimeout(poll, gameStatus === "waiting" ? 3_000 : 2_000);
+    };
+    timer = window.setTimeout(poll, 1_200);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+      controller?.abort();
+    };
+  }, [gameStatus, refresh, session]);
+
+  useEffect(() => {
+    if (game?.status !== "running") return;
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [game?.status]);
+
+  const secondsLeft = useMemo(() => {
+    if (!game?.currentRound?.endsAt) return 0;
+    return Math.max(0, Math.ceil((Date.parse(game.currentRound.endsAt) - now) / 1_000));
+  }, [game?.currentRound?.endsAt, now]);
+
+  const enterLobby = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = displayName.replace(/\s+/g, " ").trim();
+    if (!name) {
+      setError("Enter a player name.");
       return;
     }
-    resetRound(roundIndex + 1);
-    setScreen("playing");
+    setBusy(true);
+    setError("");
+    try {
+      const id = playerId();
+      const response = await gameRequest({
+        action: mode,
+        playerId: id,
+        displayName: name,
+        ...(mode === "join" ? { code: joinCode } : {}),
+      });
+      if (!response.playerToken) throw new Error("Lobby token missing.");
+      const nextSession = {
+        code: response.code,
+        displayName: name,
+        playerId: id,
+        playerToken: response.playerToken,
+      };
+      saveSession(nextSession);
+      setSession(nextSession);
+      setGame(response);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not enter lobby.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startGame = async () => {
+    if (!session || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await gameRequest({ action: "start", ...session });
+      setGame(next);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not start.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const answer = async (choiceIndex: number) => {
+    if (!session || !game?.currentRound || game.currentRound.selectedIndex !== null || answering !== null) return;
+    setAnswering(choiceIndex);
+    setError("");
+    try {
+      const next = await gameRequest({ action: "answer", ...session, choiceIndex });
+      setGame(next);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Answer not saved.");
+    } finally {
+      setAnswering(null);
+    }
+  };
+
+  const copyCode = async () => {
+    if (!game) return;
+    await navigator.clipboard.writeText(game.code);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1_500);
+  };
+
+  if (!game) {
+    return (
+      <main className="home-shell" id="top">
+        <header className="home-header">
+          <b>F/L</b>
+          <span>FIND THE LANDMARK</span>
+          <i>GENLAYER</i>
+        </header>
+
+        <section className="home-title">
+          <p>LOBBY GAME · 50 MAX</p>
+          <h1>FIND<br />THE <em>WORLD.</em></h1>
+          <div className="home-stats" aria-label="Game format">
+            <span><b>50</b> PLAYERS</span>
+            <span><b>08</b> ROUNDS</span>
+            <span><b>00</b> START XP</span>
+          </div>
+        </section>
+
+        <section className="entry-panel">
+          <div className="mode-switch" role="tablist" aria-label="Lobby action">
+            <button type="button" className={mode === "create" ? "active" : ""} onClick={() => { setMode("create"); setError(""); }} role="tab" aria-selected={mode === "create"}>CREATE</button>
+            <button type="button" className={mode === "join" ? "active" : ""} onClick={() => { setMode("join"); setError(""); }} role="tab" aria-selected={mode === "join"}>JOIN</button>
+          </div>
+          <form onSubmit={enterLobby}>
+            <label>
+              <span>PLAYER NAME</span>
+              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={24} placeholder="Atlas Ace" autoComplete="nickname" />
+            </label>
+            {mode === "join" && (
+              <label>
+                <span>ROOM CODE</span>
+                <input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 6))} maxLength={6} placeholder="MAP123" autoCapitalize="characters" autoComplete="off" />
+              </label>
+            )}
+            {error && <p className="form-error" role="alert">{error}</p>}
+            <button className="primary-action" type="submit" disabled={busy}>{busy ? "WAIT…" : mode === "create" ? "MAKE LOBBY" : "ENTER ROOM"}<i>↗</i></button>
+          </form>
+          <footer><span>PICTURE PICKS</span><span>ATLAS QUIZZES</span></footer>
+        </section>
+      </main>
+    );
   }
 
+  if (game.status === "waiting") {
+    return (
+      <main className="game-shell waiting-shell" id="top">
+        <GameHeader code={game.code} onExit={leaveGame} />
+        <div className="waiting-grid">
+          <section className="code-panel">
+            <span>ROOM CODE</span>
+            <button type="button" className="room-code" onClick={copyCode}>{game.code}</button>
+            <p>{copied ? "COPIED" : "TAP TO COPY"}</p>
+            <b>{game.playerCount}/{game.maxPlayers} IN</b>
+            {game.isHost ? (
+              <button type="button" className="primary-action start-action" onClick={startGame} disabled={busy}>{busy ? "STARTING…" : "START GAME"}<i>→</i></button>
+            ) : <strong className="waiting-note">WAITING FOR HOST</strong>}
+            {error && <p className="form-error" role="alert">{error}</p>}
+          </section>
+          <section className="roster-panel">
+            <header><span>PLAYERS</span><b>{game.playerCount}</b></header>
+            <ol>
+              {game.leaderboard.map((entry, index) => (
+                <li key={entry.id} className={entry.isYou ? "is-you" : ""}>
+                  <span>{String(index + 1).padStart(2, "0")}</span>
+                  <b>{entry.displayName}</b>
+                  <i>{entry.isHost ? "HOST" : entry.isYou ? "YOU" : "READY"}</i>
+                </li>
+              ))}
+            </ol>
+          </section>
+        </div>
+      </main>
+    );
+  }
+
+  if (game.status === "registering" || game.status === "verifying") {
+    const sealing = game.status === "verifying";
+    return (
+      <main className="game-shell status-shell" id="top">
+        <GameHeader code={game.code} onExit={leaveGame} />
+        <section className="status-poster">
+          <span>{sealing ? `${game.settledRounds}/${game.roundCount}` : "00/08"}</span>
+          <h1>{sealing ? "SEALING\nSCORES" : "MAKING\nTHE BOARD"}</h1>
+          <div className="status-loader"><i /></div>
+        </section>
+        <Board entries={game.leaderboard} />
+        {error && <p className="floating-error" role="alert">{error}</p>}
+      </main>
+    );
+  }
+
+  if (game.status === "error") {
+    return (
+      <main className="game-shell result-shell result-error" id="top">
+        <GameHeader code={game.code} onExit={leaveGame} />
+        <section className="result-copy">
+          <span>NO SCORE</span>
+          <h1>GAME<br />STOPPED.</h1>
+          <p>{game.error || "Try a new room."}</p>
+          <button type="button" className="primary-action" onClick={leaveGame}>NEW LOBBY<i>↗</i></button>
+        </section>
+      </main>
+    );
+  }
+
+  if (game.status === "finished") {
+    return (
+      <main className="game-shell result-shell" id="top">
+        <GameHeader code={game.code} onExit={leaveGame} />
+        <section className="winner-panel">
+          <span>WINNER</span>
+          <h1>{game.winner?.displayName || "TIE GAME"}</h1>
+          <strong>{game.winner?.score ?? 0} XP</strong>
+          <button type="button" className="primary-action" onClick={leaveGame}>NEW LOBBY<i>↗</i></button>
+        </section>
+        <Board entries={game.leaderboard} full />
+      </main>
+    );
+  }
+
+  const round = game.currentRound;
+  const you = game.leaderboard.find((entry) => entry.isYou);
+  const duration = round ? Math.max(1, Date.parse(round.endsAt) - Date.parse(round.startedAt)) : 1;
+  const timerPercent = round ? Math.max(0, Math.min(100, ((Date.parse(round.endsAt) - now) / duration) * 100)) : 0;
+
   return (
-    <main className={`atlas-app screen-${screen}`}>
-      <div className="paper-noise" aria-hidden="true" />
-      <button className="edge-brand" onClick={leaveRun} aria-label="Find the Landmark home">
-        <span>F／L</span><b>FIND THE LANDMARK</b>
-      </button>
-
-      {screen === "home" && (
-        <section className="atlas-home">
-          <div className="atlas-meta">
-            <span>DAILY ROUTE {routeCode}</span><span>07 STOPS</span><span>GENLAYER LIVE</span>
-          </div>
-          <div className="map-field" aria-label="Today's world route">
-            <svg viewBox="0 0 1000 640" className="route-drawing" aria-hidden="true">
-              <path d="M92 432 C230 212 320 500 458 282 S718 130 908 342" />
-              <circle cx="92" cy="432" r="9" /><circle cx="458" cy="282" r="9" /><circle cx="908" cy="342" r="9" />
-            </svg>
-            {previewRounds.map((item, index) => (
-              <figure className={`map-photo map-photo-${index + 1}`} key={item.roundId}>
-                <Image src={item.image} alt="" fill sizes="(max-width: 720px) 40vw, 22vw" priority={index === 0} />
-                <figcaption><b>0{index + 1}</b><span>{index === 0 ? "FIRST CLUE" : "TODAY"}</span></figcaption>
-              </figure>
-            ))}
-            <div className="map-stamp"><span>WORLD<br />ROUTE</span><b>{routeCode}</b></div>
-            {previewRounds.map((item, index) => (
-              <div className={`map-pin pin-${["one", "two", "three"][index]}`} key={`${item.roundId}-pin`}><i />{item.city.split(",")[0].toUpperCase()}</div>
-            ))}
-          </div>
-          <div className="home-title">
-            <p>NEW LANDMARKS DAILY. QUIZ STAMPS IN BETWEEN.</p>
-            <h1>PACK LIGHT.<br /><em>THINK FAST.</em></h1>
-          </div>
-          <button className="start-orbit" onClick={beginRun}>
-            <span>START<br />TODAY&apos;S<br />ROUTE</span><i>↗</i>
-          </button>
-          <ol className="ticket-strip" aria-label="Route format">
-            <li><b>04</b><span>QUICK PICKS<small>100 XP EACH</small></span></li>
-            <li><b>02</b><span>ATLAS QUIZZES<small>75 XP EACH</small></span></li>
-            <li><b>01</b><span>PHOTO HUNT<small>FIRST PROOF WINS</small></span></li>
-          </ol>
+    <main className="game-shell round-shell" id="top">
+      <GameHeader code={game.code} onExit={leaveGame} />
+      <div className="round-strip">
+        <span>ROUND {String(game.currentRoundIndex + 1).padStart(2, "0")}/{String(game.roundCount).padStart(2, "0")}</span>
+        <b>{round?.kind === "quiz" ? "ATLAS QUIZ" : "QUICK PICK"}</b>
+        <strong>{you?.score ?? 0} XP</strong>
+      </div>
+      <div className="round-layout">
+        <section className={`challenge-panel ${round?.kind === "quiz" ? "quiz-panel" : ""}`}>
+          {round?.image ? (
+            <figure>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={round.image} alt="Landmark to identify" />
+              {round.creditUrl && <figcaption><a href={round.creditUrl} target="_blank" rel="noreferrer">{round.credit}</a></figcaption>}
+            </figure>
+          ) : (
+            <div className="quiz-mark" aria-hidden="true">?</div>
+          )}
+          <h1>{round?.question}</h1>
         </section>
-      )}
-
-      {(screen === "playing" || screen === "result") && (
-        <section className={`checkpoint checkpoint-${round.type}`}>
-          <nav className="checkpoint-rail" aria-label="Route progress">
-            {rounds.map((item, index) => (
-              <span key={`${item.type}-${index}`} className={index === roundIndex ? "active" : index < roundIndex ? "done" : ""}>
-                {String(index + 1).padStart(2, "0")}
-              </span>
-            ))}
-          </nav>
-          <div className="checkpoint-top">
-            <button onClick={leaveRun} aria-label="Leave route">×</button>
-            <p><span>STOP {String(roundIndex + 1).padStart(2, "0")}</span>{answerLabel(round)}</p>
-            <strong>{score} XP</strong>
+        <section className="answer-panel">
+          <div className="timer-row">
+            <span>TIME</span><b>{String(secondsLeft).padStart(2, "0")}</b>
+            <i><em style={{ width: `${timerPercent}%` }} /></i>
           </div>
-
-          {screen === "playing" && round.type === "identify" && (
-            <div className="image-round">
-              <figure className="landmark-canvas">
-                <Image src={round.image} alt="Landmark to identify" fill sizes="100vw" priority />
-                <div className="image-wash" />
-                <figcaption>IMAGE SOURCE · <a href={round.creditUrl} target="_blank" rel="noreferrer">{round.credit}</a></figcaption>
-              </figure>
-              <div className={`compass-clock ${seconds <= 5 ? "urgent" : ""}`}>
-                <i /><small>LOCK IN</small><b>{timeLabel(seconds)}</b>
-              </div>
-              <div className="round-prompt"><span>WHERE ARE WE?</span><h2>Name this landmark.</h2></div>
-              <div className="answer-dock">
-                {round.options.map((option, index) => (
-                  <button key={option} className={selected === index ? "selected" : ""} onClick={() => chooseAnswer(index)} disabled={!answerTicket || selected !== null || verifyState !== "idle"}>
-                    <span>{String.fromCharCode(65 + index)}</span><b>{option}</b><i>↗</i>
-                  </button>
-                ))}
-              </div>
-              {verifyState === "preparing" && <div className="signal-banner"><i />OPENING THE ANSWER GATE</div>}
-              {verifyState === "checking" && <div className="validator-curtain"><i /><p>VALIDATORS ARE READING THE LANDMARK</p><span>Independent proposal audit in progress</span></div>}
-              {errorMessage && <div className="floating-error" role="alert">{errorMessage}</div>}
-            </div>
-          )}
-
-          {screen === "playing" && round.type === "quiz" && (
-            <div className="quiz-round">
-              <div className="quiz-index" aria-hidden="true">Q{String(roundIndex + 1).padStart(2, "0")}</div>
-              <div className="quiz-heading">
-                <span>ATLAS FIELD NOTE · 75 XP</span>
-                <p>NO IMAGE THIS TIME</p>
-                <h2>{round.question}</h2>
-              </div>
-              <div className={`quiz-clock ${seconds <= 5 ? "urgent" : ""}`}><small>DECIDE</small><b>{timeLabel(seconds)}</b></div>
-              <div className="quiz-options">
-                {round.options.map((option, index) => (
-                  <button key={option} className={selected === index ? "selected" : ""} onClick={() => chooseAnswer(index)} disabled={!answerTicket || selected !== null || verifyState !== "idle"}>
-                    <span>{String.fromCharCode(65 + index)}</span><b>{option}</b><i>→</i>
-                  </button>
-                ))}
-              </div>
-              <p className="quiz-footnote">GENLAYER VALIDATORS ANSWER INDEPENDENTLY · MAJORITY SEALS THE NOTE</p>
-              {verifyState === "preparing" && <div className="signal-banner"><i />OPENING THE QUIZ GATE</div>}
-              {verifyState === "checking" && <div className="validator-curtain"><i /><p>VALIDATORS ARE CHECKING THE FACT</p><span>No stored answer key</span></div>}
-              {errorMessage && <div className="floating-error" role="alert">{errorMessage}</div>}
-            </div>
-          )}
-
-          {screen === "playing" && round.type === "hunt" && (
-            <div className="hunt-round">
-              <div className="hunt-word" aria-hidden="true">{round.place.replace("The ", "")}</div>
-              <div className="hunt-brief">
-                <span>FIRST ACCEPTED IMAGE TODAY</span>
-                <h2>Find<br />{round.place}.</h2>
-                <p>{round.city}</p>
-                <blockquote>{round.clue}</blockquote>
-              </div>
-              <div className="hunt-clock"><small>HUNT WINDOW</small><b>{timeLabel(seconds)}</b><span>250 XP · ONE WINNER</span></div>
-              <div className="dispatch-bar">
-                <label htmlFor="image-url">DROP A DIRECT IMAGE LINK</label>
-                <div className="dispatch-input">
-                  <span>↗</span>
-                  <input id="image-url" type="url" value={imageUrl} onChange={(event) => { setImageUrl(event.target.value); setErrorMessage(""); }} placeholder="https://upload.wikimedia.org/...jpg" disabled={verifyState === "checking"} autoComplete="off" />
-                  <button onClick={submitProof} disabled={!imageUrl.startsWith("https://") || verifyState !== "idle"}>
-                    {verifyState === "checking" ? "CHECKING…" : "CLAIM IT"}<i>→</i>
-                  </button>
-                </div>
-                <p>WIKIMEDIA OR UNSPLASH · JPG, PNG, WEBP · MAX 8 MB</p>
-                {errorMessage && <div className="dispatch-error" role="alert">{errorMessage}</div>}
-              </div>
-              <a className="chain-tag" href={`${EXPLORER_URL}/contracts/${CONTRACT_ADDRESS}`} target="_blank" rel="noreferrer">GENLAYER CONSENSUS ↗</a>
-            </div>
-          )}
-
-          {screen === "result" && (
-            <div className={`stamp-result ${successful ? "success" : "miss"}`}>
-              <div className="result-cross" aria-hidden="true" />
-              <p>{copy.eyebrow}</p>
-              <h2>{copy.title}</h2>
-              <span>{copy.body}</span>
-              <div className="result-score">{earnedXp ? `+${earnedXp}` : "0"}<small>XP</small></div>
-              {proofMeta?.transactionHash && <a href={proofMeta.explorerUrl ?? `${EXPLORER_URL}/txs/${proofMeta.transactionHash}`} target="_blank" rel="noreferrer">OPEN RECEIPT ↗</a>}
-              <button onClick={nextRound}>{isLastRound ? "FINISH ROUTE" : "NEXT STOP"}<i>→</i></button>
-            </div>
-          )}
+          <div className="answers">
+            {round?.options.map((option, index) => {
+              const selected = round.selectedIndex === index || answering === index;
+              return (
+                <button key={option} type="button" className={selected ? "selected" : ""} disabled={round.selectedIndex !== null || answering !== null || secondsLeft === 0} onClick={() => answer(index)}>
+                  <span>{String.fromCharCode(65 + index)}</span><b>{option}</b><i>{selected ? "LOCKED" : "→"}</i>
+                </button>
+              );
+            })}
+          </div>
+          {error && <p className="form-error" role="alert">{error}</p>}
         </section>
-      )}
-
-      {screen === "finished" && (
-        <section className="route-finished">
-          <div className="finish-sun"><span>ROUTE<br />COMPLETE</span></div>
-          <p>SEVEN STOPS · ONE WORLD · VALIDATOR-SCORED</p>
-          <h1>YOUR PASSPORT<br />NEEDS MORE PAGES.</h1>
-          <div className="finish-score"><span>TODAY&apos;S HAUL</span><b>{score}</b><small>XP</small></div>
-          <button onClick={leaveRun}>BACK TO THE MAP <i>↗</i></button>
-          <a href={`${EXPLORER_URL}/contracts/${CONTRACT_ADDRESS}`} target="_blank" rel="noreferrer">VIEW LIVE CONTRACT ↗</a>
-        </section>
-      )}
+        <Board entries={game.leaderboard.slice(0, 8)} />
+      </div>
     </main>
   );
 }
