@@ -3,7 +3,14 @@ import { privateKeyToAccount } from "viem/accounts";
 const EDGE_FUNCTION_URL =
   "https://auovgyyatbxdfynbbfth.supabase.co/functions/v1/landmark-api";
 const REQUEST_WINDOW_MS = 10 * 60 * 1000;
+const MAX_BODY_BYTES = 20_000;
+const MAX_RATE_LIMIT_KEYS = 5_000;
 const recentRequests = new Map<string, number[]>();
+let lastRateLimitSweep = 0;
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const maxDuration = 100;
 
 type GameAction = "create" | "join" | "state" | "start" | "answer";
 
@@ -36,6 +43,17 @@ function clientIp(request: Request) {
 
 function limited(key: string, maximum: number) {
   const now = Date.now();
+  if (now - lastRateLimitSweep >= REQUEST_WINDOW_MS) {
+    for (const [storedKey, requests] of recentRequests) {
+      const activeRequests = requests.filter((time) => now - time < REQUEST_WINDOW_MS);
+      if (activeRequests.length) recentRequests.set(storedKey, activeRequests);
+      else recentRequests.delete(storedKey);
+    }
+    lastRateLimitSweep = now;
+  }
+  if (recentRequests.size >= MAX_RATE_LIMIT_KEYS && !recentRequests.has(key)) {
+    recentRequests.clear();
+  }
   const active = (recentRequests.get(key) ?? []).filter((time) => now - time < REQUEST_WINDOW_MS);
   if (active.length >= maximum) return true;
   active.push(now);
@@ -92,9 +110,23 @@ async function forwardSigned(body: Record<string, unknown>, timeoutMs: number) {
 }
 
 export async function POST(request: Request) {
+  const origin = request.headers.get("origin");
+  if (origin && origin !== new URL(request.url).origin) {
+    return json({ error: "Cross-site request blocked." }, 403);
+  }
+
+  const declaredLength = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+    return json({ error: "Request too large." }, 413);
+  }
+
   let input: GameBody;
   try {
-    input = await request.json() as GameBody;
+    const rawBody = await request.text();
+    if (new TextEncoder().encode(rawBody).byteLength > MAX_BODY_BYTES) {
+      return json({ error: "Request too large." }, 413);
+    }
+    input = JSON.parse(rawBody) as GameBody;
   } catch {
     return json({ error: "Invalid request." }, 400);
   }

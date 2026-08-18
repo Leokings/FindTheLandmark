@@ -17,13 +17,17 @@ await initializeImageMagick(magickWasm);
 
 const CONTRACT_ADDRESS = "0xa9778Ef1607CCcA9Da3Dce8da9fC6a39523598ee";
 const EXPECTED_RELAYER = "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec";
-const SITE_SIGNER = "0xdc2606D6c7833178fFF3D456ADEF8d97029ea196";
+const SITE_SIGNERS = [
+  "0xdc2606D6c7833178fFF3D456ADEF8d97029ea196",
+  "0xFa1A2cCa8a3A00205038Db8DD847a2F016Cc7BA9",
+] as const;
 const GENLAYER_RPC_URL = "https://studio.genlayer.com/api";
 const EVIDENCE_BUCKET = "landmark-evidence";
 const ALLOWED_IMAGE_HOSTS = new Set(["upload.wikimedia.org"]);
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_NORMALIZED_DIMENSION = 1_280;
 const MAX_CLOCK_SKEW_MS = 2 * 60 * 1000;
+const NONCE_RETENTION_MS = 10 * 60 * 1000;
 const GAME_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 type DatabaseClient = ReturnType<typeof createClient>;
@@ -81,7 +85,7 @@ type RoundRow = {
 };
 
 const headers = {
-  "Access-Control-Allow-Origin": "https://find-the-landmark.plain3rd.chatgpt.site",
+  "Access-Control-Allow-Origin": "https://find-the-landmark.vercel.app",
   "Access-Control-Allow-Headers": "content-type, x-landmark-timestamp, x-landmark-nonce, x-landmark-signature",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Content-Type": "application/json",
@@ -103,14 +107,18 @@ async function authenticate(request: Request, rawBody: string) {
   const nonce = request.headers.get("x-landmark-nonce") ?? "";
   const signature = request.headers.get("x-landmark-signature") ?? "";
   const numericTimestamp = Number(timestamp);
-  if (!/^\d{13}$/.test(timestamp) || Math.abs(Date.now() - numericTimestamp) > MAX_CLOCK_SKEW_MS) return false;
-  if (!/^[a-f0-9-]{36}$/i.test(nonce) || !/^0x[a-f0-9]{130}$/i.test(signature)) return false;
+  if (!/^\d{13}$/.test(timestamp) || Math.abs(Date.now() - numericTimestamp) > MAX_CLOCK_SKEW_MS) return null;
+  if (!/^[a-f0-9-]{36}$/i.test(nonce) || !/^0x[a-f0-9]{130}$/i.test(signature)) return null;
   const bodyHash = await sha256Hex(rawBody);
-  return verifyMessage({
-    address: SITE_SIGNER,
-    message: `find-the-landmark:${timestamp}:${nonce}:${bodyHash}`,
-    signature: signature as `0x${string}`,
-  });
+  const message = `find-the-landmark:${timestamp}:${nonce}:${bodyHash}`;
+  for (const address of SITE_SIGNERS) {
+    if (await verifyMessage({
+      address,
+      message,
+      signature: signature as `0x${string}`,
+    })) return nonce;
+  }
+  return null;
 }
 
 function database() {
@@ -129,6 +137,17 @@ function database() {
   return createClient(projectUrl, secretKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+}
+
+async function claimNonce(db: DatabaseClient, nonce: string) {
+  const { error } = await db.from("landmark_request_nonces").insert({ nonce });
+  if (error?.code === "23505") return false;
+  if (error) throw error;
+  await db
+    .from("landmark_request_nonces")
+    .delete()
+    .lt("received_at", new Date(Date.now() - NONCE_RETENTION_MS).toISOString());
+  return true;
 }
 
 function normalizePlayerKey(value: unknown) {
@@ -764,7 +783,8 @@ Deno.serve(async (request: Request) => {
   if (request.method !== "POST") return json({ error: "Method not allowed." }, 405);
 
   const rawBody = await request.text();
-  if (rawBody.length > 20_000 || !(await authenticate(request, rawBody))) {
+  const nonce = rawBody.length <= 20_000 ? await authenticate(request, rawBody) : null;
+  if (!nonce) {
     return json({ error: "Unauthorized request." }, 401);
   }
   let body: Record<string, unknown>;
@@ -774,8 +794,9 @@ Deno.serve(async (request: Request) => {
     return json({ error: "Invalid JSON." }, 400);
   }
 
-  const db = database();
   try {
+    const db = database();
+    if (!(await claimNonce(db, nonce))) return json({ error: "Unauthorized request." }, 401);
     if (body.action === "create") return await createLobby(db, body);
     if (body.action === "join") return await joinLobby(db, body);
 

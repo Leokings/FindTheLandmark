@@ -39,5 +39,7 @@ yarn-error.log*
 /outputs/
 /work/
 /artifacts/
+supabase/.temp/
+*.tsbuildinfo
 __pycache__/
 *.py[cod]
