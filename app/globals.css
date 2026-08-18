@@ -327,27 +327,39 @@ a:focus-visible {
   grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.1fr);
 }
 
+.waiting-grid > * {
+  min-width: 0;
+}
+
 .code-panel {
+  container-type: inline-size;
+  min-width: 0;
   padding: clamp(40px, 7vw, 104px);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
+  overflow: hidden;
   color: var(--ink);
   background: var(--acid);
   border-right: 1px solid var(--ink);
 }
 
 .room-code {
+  width: 100%;
+  max-width: 100%;
   margin: 18px 0 0;
   padding: 0;
   border: 0;
+  overflow: hidden;
   background: transparent;
   font-family: var(--sans);
-  font-size: clamp(68px, 10vw, 144px);
+  font-size: clamp(48px, 13cqi, 112px);
   font-weight: 950;
   line-height: 0.9;
-  letter-spacing: 0.02em;
+  letter-spacing: -0.01em;
+  text-align: left;
+  white-space: nowrap;
 }
 
 .code-panel > p {
@@ -882,10 +894,6 @@ a:focus-visible {
     padding: 52px 22px;
     border-right: 0;
     border-bottom: 1px solid var(--ink);
-  }
-
-  .room-code {
-    font-size: clamp(62px, 18vw, 96px);
   }
 
   .roster-panel {
