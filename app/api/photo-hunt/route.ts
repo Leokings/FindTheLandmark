@@ -1,8 +1,8 @@
 import { privateKeyToAccount } from "viem/accounts";
+import { getDailyRoute, utcRunId } from "@/lib/landmark-content";
 
 const EDGE_FUNCTION_URL =
   "https://auovgyyatbxdfynbbfth.supabase.co/functions/v1/landmark-api";
-const ALLOWED_HUNTS = new Set(["hunt-colosseum-001", "hunt-eiffel-001"]);
 const ALLOWED_IMAGE_HOSTS = new Set(["upload.wikimedia.org", "images.unsplash.com"]);
 const REQUEST_WINDOW_MS = 10 * 60 * 1000;
 const MAX_REQUESTS_PER_WINDOW = 4;
@@ -134,7 +134,8 @@ export async function POST(request: Request) {
   const huntId = typeof input.huntId === "string" ? input.huntId : "";
   const evidenceUrl = normalizeUrl(input.evidenceUrl);
   const playerId = typeof input.playerId === "string" ? input.playerId.trim() : "";
-  if (!ALLOWED_HUNTS.has(huntId)) return json({ error: "That photo hunt is not active." }, 400);
+  const activeHunt = getDailyRoute().find((round) => round.type === "hunt");
+  if (!activeHunt || activeHunt.huntId !== huntId) return json({ error: "That photo hunt is not active today." }, 400);
   if (!evidenceUrl) {
     return json({ error: "Use a direct Wikimedia Commons or Unsplash HTTPS image link." }, 400);
   }
@@ -144,5 +145,5 @@ export async function POST(request: Request) {
 
   const submissionId = `submission-${crypto.randomUUID()}`;
   const userIdHash = await sha256Hex(`find-the-landmark:${playerId}`);
-  return forwardSigned({ action: "submit", submissionId, userIdHash, huntId, evidenceUrl }, 95_000);
+  return forwardSigned({ action: "submit", submissionId, userIdHash, huntId, runId: utcRunId(), evidenceUrl }, 95_000);
 }

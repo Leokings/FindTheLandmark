@@ -14,16 +14,35 @@ const magickWasm = await Deno.readFile(
 );
 await initializeImageMagick(magickWasm);
 
-const CONTRACT_ADDRESS = "0xC3fD27d653D3298833836d239f014f184d85Aa8C";
+const CONTRACT_ADDRESS = "0xE1926EdBeBC1B848b477F86b3B310B8bde9792F6";
 const EXPECTED_RELAYER = "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec";
 const SITE_SIGNER = "0x7060227c19040F2af4f066e5247B9e87E5F62132";
 const GENLAYER_RPC_URL = "https://studio.genlayer.com/api";
 const EXPLORER_URL = "https://explorer-studio.genlayer.com";
-const ALLOWED_HUNTS = new Set(["hunt-colosseum-001", "hunt-eiffel-001"]);
+const ALLOWED_HUNTS = new Set([
+  "hunt-colosseum-001",
+  "hunt-eiffel-001",
+  "hunt-pyramids-001",
+  "hunt-tower-bridge-001",
+]);
+const ALLOWED_QUIZZES = new Set([
+  "quiz-oldest-001",
+  "quiz-mausoleum-001",
+  "quiz-jordan-001",
+  "quiz-strait-001",
+  "quiz-gaudi-001",
+]);
 const QUICK_PICK_IMAGES: Record<string, string> = {
   "quick-taj-001": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/74/Taj_Mahal%2C_Agra%2C_India_edit2.jpg/1280px-Taj_Mahal%2C_Agra%2C_India_edit2.jpg",
   "quick-redeemer-001": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Christtheredeemer.jpg/1280px-Christtheredeemer.jpg",
   "quick-sydney-001": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Sydney_Opera_House_from_Circular_Quay.jpg/960px-Sydney_Opera_House_from_Circular_Quay.jpg",
+  "quick-machu-001": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bb/Machu_Picchu%2C_2023_%28012%29.jpg/1280px-Machu_Picchu%2C_2023_%28012%29.jpg",
+  "quick-petra-001": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/Al_Deir_Petra.JPG/1280px-Al_Deir_Petra.JPG",
+  "quick-liberty-001": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/89/Front_view_of_Statue_of_Liberty_%28cropped%29.jpg/1280px-Front_view_of_Statue_of_Liberty_%28cropped%29.jpg",
+  "quick-sagrada-001": "https://upload.wikimedia.org/wikipedia/commons/e/ef/SF_maig_2_cropped.jpg",
+  "quick-fuji-001": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/View_of_Mount_Fuji_from_%C5%8Cwakudani_20211202.jpg/1280px-View_of_Mount_Fuji_from_%C5%8Cwakudani_20211202.jpg",
+  "quick-golden-gate-001": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bf/Golden_Gate_Bridge_as_seen_from_Battery_East.jpg/1280px-Golden_Gate_Bridge_as_seen_from_Battery_East.jpg",
+  "quick-angkor-001": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/41/Angkor_Wat.jpg/1280px-Angkor_Wat.jpg",
 };
 const ALLOWED_IMAGE_HOSTS = new Set(["upload.wikimedia.org", "images.unsplash.com"]);
 const EVIDENCE_BUCKET = "landmark-evidence";
@@ -256,12 +275,16 @@ async function verdictResponse(
 
   const result = await waitForResult(client, submissionId) as Record<string, unknown> | null;
   if (!result) return json({ status: "pending", ...metadata }, 202);
-  const kind = result.kind === "quick_pick" ? "quick_pick" : "photo_hunt";
+  const kind = result.kind === "quick_pick"
+    ? "quick_pick"
+    : result.kind === "landmark_quiz"
+      ? "landmark_quiz"
+      : "photo_hunt";
   return json({
     status: result.accepted === true ? "accepted" : "rejected",
     kind,
     rewardXp: Number(result.reward_xp ?? 0),
-    ...(kind === "quick_pick" ? {
+    ...(kind !== "photo_hunt" ? {
       selectedIndex: Number(result.selected_index ?? -1),
       correctIndex: Number(result.correct_index ?? -1),
       confident: result.confident === true,
@@ -311,6 +334,8 @@ Deno.serve(async (request: Request) => {
     }
     const userIdHash = typeof body.userIdHash === "string" ? body.userIdHash : "";
     if (!/^[a-f0-9]{64}$/.test(userIdHash)) return json({ error: "Invalid player." }, 400);
+    const runId = typeof body.runId === "string" ? body.runId : "";
+    if (!/^route-\d{4}-\d{2}-\d{2}$/.test(runId)) return json({ error: "Invalid daily route." }, 400);
     const privateKey = Deno.env.get("GENLAYER_RELAYER_PRIVATE_KEY");
     if (!privateKey) return json({ error: "The GenLayer relayer is not configured." }, 503);
     const account = createAccount(privateKey as `0x${string}`);
@@ -340,8 +365,33 @@ Deno.serve(async (request: Request) => {
         address: CONTRACT_ADDRESS as `0x${string}`,
         functionName: "verify_pick",
         leaderOnly: false,
-        args: [submissionId, userIdHash, roundId, choiceIndex, mirrored.evidenceUrl, mirrored.evidenceSha256],
+        args: [submissionId, userIdHash, roundId, runId, choiceIndex, mirrored.evidenceUrl, mirrored.evidenceSha256],
       });
+      console.log(JSON.stringify({ event: "submission_sent", kind: "quick_pick", submissionId, transactionHash }));
+      const receipt = await waitForReceipt(client, transactionHash);
+      return await verdictResponse(client, transactionHash, submissionId, receipt);
+    }
+
+    if (action === "quiz") {
+      const quizId = typeof body.quizId === "string" ? body.quizId : "";
+      const choiceIndex = Number(body.choiceIndex);
+      if (!ALLOWED_QUIZZES.has(quizId)) return json({ error: "That quiz is not active." }, 400);
+      if (!Number.isInteger(choiceIndex) || choiceIndex < 0 || choiceIndex > 3) {
+        return json({ error: "Choose one answer." }, 400);
+      }
+      await client.readContract({
+        address: CONTRACT_ADDRESS,
+        functionName: "get_quiz",
+        args: [quizId],
+        transactionHashVariant: "latest-nonfinal",
+      });
+      const transactionHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: "verify_quiz",
+        leaderOnly: false,
+        args: [submissionId, userIdHash, quizId, runId, choiceIndex],
+      });
+      console.log(JSON.stringify({ event: "submission_sent", kind: "landmark_quiz", submissionId, transactionHash }));
       const receipt = await waitForReceipt(client, transactionHash);
       return await verdictResponse(client, transactionHash, submissionId, receipt);
     }
@@ -354,20 +404,21 @@ Deno.serve(async (request: Request) => {
     const sourceBytes = await downloadEvidence(evidenceUrl);
     const mirrored = await mirrorEvidence(submissionId, sourceBytes);
 
-    const hunt = await client.readContract({
+    const huntStatus = await client.readContract({
       address: CONTRACT_ADDRESS,
-      functionName: "get_hunt",
-      args: [huntId],
+      functionName: "get_hunt_status",
+      args: [huntId, runId],
       transactionHashVariant: "latest-nonfinal",
     }) as Record<string, unknown>;
-    if (hunt.has_winner === true) return json({ error: "Someone already won this photo hunt." }, 409);
+    if (huntStatus.has_winner === true) return json({ error: "Someone already won this photo hunt." }, 409);
 
     const transactionHash = await client.writeContract({
       address: CONTRACT_ADDRESS as `0x${string}`,
       functionName: "verify_photo",
       leaderOnly: false,
-      args: [submissionId, userIdHash, huntId, mirrored.evidenceUrl, mirrored.evidenceSha256],
+      args: [submissionId, userIdHash, huntId, runId, mirrored.evidenceUrl, mirrored.evidenceSha256],
     });
+    console.log(JSON.stringify({ event: "submission_sent", kind: "photo_hunt", submissionId, transactionHash }));
     const receipt = await waitForReceipt(client, transactionHash);
     return await verdictResponse(client, transactionHash, submissionId, receipt);
   } catch (error) {

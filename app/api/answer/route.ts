@@ -1,17 +1,19 @@
 import { verifyMessage } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { getDailyRoute, utcRunId } from "@/lib/landmark-content";
 
 const EDGE_FUNCTION_URL =
   "https://auovgyyatbxdfynbbfth.supabase.co/functions/v1/landmark-api";
-const ALLOWED_ROUNDS = new Set(["quick-taj-001", "quick-redeemer-001", "quick-sydney-001"]);
-const TICKET_LIFETIME_MS = 20_000;
 const REQUEST_WINDOW_MS = 10 * 60 * 1000;
 const recentStarts = new Map<string, number[]>();
 const recentSubmissions = new Map<string, number[]>();
 const recentStatuses = new Map<string, number[]>();
 
+type AnswerKind = "identify" | "quiz";
 type Ticket = {
-  roundId: string;
+  kind: AnswerKind;
+  challengeId: string;
+  runId: string;
   userIdHash: string;
   issuedAt: number;
   expiresAt: number;
@@ -19,9 +21,10 @@ type Ticket = {
   signature: `0x${string}`;
 };
 
-type QuickPickBody = {
+type AnswerBody = {
   action?: unknown;
-  roundId?: unknown;
+  kind?: unknown;
+  challengeId?: unknown;
   playerId?: unknown;
   choiceIndex?: unknown;
   ticket?: unknown;
@@ -60,19 +63,38 @@ function signer() {
 }
 
 function ticketMessage(ticket: Omit<Ticket, "signature">) {
-  return `find-the-landmark:quick-ticket:${ticket.roundId}:${ticket.userIdHash}:${ticket.issuedAt}:${ticket.expiresAt}:${ticket.nonce}`;
+  return [
+    "find-the-landmark:answer-ticket",
+    ticket.kind,
+    ticket.challengeId,
+    ticket.runId,
+    ticket.userIdHash,
+    ticket.issuedAt,
+    ticket.expiresAt,
+    ticket.nonce,
+  ].join(":");
 }
 
 function validTicket(value: unknown): value is Ticket {
   if (!value || typeof value !== "object") return false;
   const ticket = value as Record<string, unknown>;
-  return typeof ticket.roundId === "string"
+  return (ticket.kind === "identify" || ticket.kind === "quiz")
+    && typeof ticket.challengeId === "string"
+    && typeof ticket.runId === "string"
     && typeof ticket.userIdHash === "string"
     && typeof ticket.issuedAt === "number"
     && typeof ticket.expiresAt === "number"
     && typeof ticket.nonce === "string"
     && typeof ticket.signature === "string"
     && /^0x[a-f0-9]{130}$/i.test(ticket.signature);
+}
+
+function activeChallenge(kind: AnswerKind, challengeId: string) {
+  return getDailyRoute().some((round) => (
+    kind === "identify"
+      ? round.type === "identify" && round.roundId === challengeId
+      : round.type === "quiz" && round.quizId === challengeId
+  ));
 }
 
 async function forwardSigned(body: Record<string, string | number>, timeoutMs: number) {
@@ -110,15 +132,15 @@ async function forwardSigned(body: Record<string, string | number>, timeoutMs: n
 }
 
 export async function POST(request: Request) {
-  let input: QuickPickBody;
+  let input: AnswerBody;
   try {
-    input = await request.json() as QuickPickBody;
+    input = await request.json() as AnswerBody;
   } catch {
     return json({ error: "Invalid request." }, 400);
   }
+
   const key = clientKey(request);
-  const action = input.action;
-  if (action === "status") {
+  if (input.action === "status") {
     if (limited(key, recentStatuses, 30)) return json({ error: "Too many status checks." }, 429);
     const submissionId = typeof input.submissionId === "string" ? input.submissionId : "";
     const transactionHash = typeof input.transactionHash === "string" ? input.transactionHash : "";
@@ -127,44 +149,54 @@ export async function POST(request: Request) {
     return forwardSigned({ action: "status", submissionId, transactionHash }, 25_000);
   }
 
-  const roundId = typeof input.roundId === "string" ? input.roundId : "";
+  const kind = input.kind === "identify" || input.kind === "quiz" ? input.kind : null;
+  const challengeId = typeof input.challengeId === "string" ? input.challengeId : "";
   const player = typeof input.playerId === "string" ? input.playerId.trim() : "";
-  if (!ALLOWED_ROUNDS.has(roundId)) return json({ error: "That checkpoint is not active." }, 400);
+  if (!kind || !activeChallenge(kind, challengeId)) return json({ error: "That checkpoint is not active today." }, 400);
   if (!/^[A-Za-z0-9_-]{12,100}$/.test(player)) return json({ error: "The player session is invalid." }, 400);
   const userIdHash = await sha256Hex(`find-the-landmark:${player}`);
   const account = signer();
   if (!account) return json({ error: "Live verification is temporarily unavailable." }, 503);
+  const lifetimeMs = kind === "quiz" ? 25_000 : 20_000;
 
-  if (action === "start") {
-    if (limited(key, recentStarts, 12)) return json({ error: "Too many round starts." }, 429);
+  if (input.action === "start") {
+    if (limited(key, recentStarts, 14)) return json({ error: "Too many round starts." }, 429);
     const now = Date.now();
     const unsigned = {
-      roundId,
+      kind,
+      challengeId,
+      runId: utcRunId(),
       userIdHash,
       issuedAt: now,
-      expiresAt: now + TICKET_LIFETIME_MS,
+      expiresAt: now + lifetimeMs,
       nonce: crypto.randomUUID(),
     };
     const signature = await account.signMessage({ message: ticketMessage(unsigned) });
-    return json({ ticket: { ...unsigned, signature }, seconds: 20 });
+    return json({ ticket: { ...unsigned, signature }, seconds: lifetimeMs / 1_000 });
   }
 
-  if (action !== "submit") return json({ error: "Invalid action." }, 400);
-  if (limited(key, recentSubmissions, 6)) return json({ error: "Too many answer attempts." }, 429);
+  if (input.action !== "submit") return json({ error: "Invalid action." }, 400);
+  if (limited(key, recentSubmissions, 8)) return json({ error: "Too many answer attempts." }, 429);
   const choiceIndex = Number(input.choiceIndex);
   if (!Number.isInteger(choiceIndex) || choiceIndex < 0 || choiceIndex > 3) return json({ error: "Choose one answer." }, 400);
   if (!validTicket(input.ticket)) return json({ error: "This answer ticket is invalid." }, 400);
   const { signature, ...unsigned } = input.ticket;
-  if (unsigned.roundId !== roundId || unsigned.userIdHash !== userIdHash) return json({ error: "This answer ticket does not match the round." }, 400);
-  if (unsigned.issuedAt > Date.now() + 5_000 || unsigned.expiresAt < Date.now() || unsigned.expiresAt - unsigned.issuedAt !== TICKET_LIFETIME_MS) {
-    return json({ error: "Time ran out for this checkpoint." }, 408);
-  }
-  const authentic = await verifyMessage({
-    address: account.address,
-    message: ticketMessage(unsigned),
-    signature,
-  });
+  if (
+    unsigned.kind !== kind
+    || unsigned.challengeId !== challengeId
+    || unsigned.runId !== utcRunId()
+    || unsigned.userIdHash !== userIdHash
+  ) return json({ error: "This answer ticket does not match the round." }, 400);
+  if (
+    unsigned.issuedAt > Date.now() + 5_000
+    || unsigned.expiresAt < Date.now()
+    || unsigned.expiresAt - unsigned.issuedAt !== lifetimeMs
+  ) return json({ error: "Time ran out for this checkpoint." }, 408);
+  const authentic = await verifyMessage({ address: account.address, message: ticketMessage(unsigned), signature });
   if (!authentic) return json({ error: "This answer ticket is invalid." }, 400);
+
   const submissionId = `submission-${crypto.randomUUID()}`;
-  return forwardSigned({ action: "quick_pick", submissionId, userIdHash, roundId, choiceIndex }, 95_000);
+  return kind === "identify"
+    ? forwardSigned({ action: "quick_pick", submissionId, userIdHash, roundId: challengeId, runId: unsigned.runId, choiceIndex }, 95_000)
+    : forwardSigned({ action: "quiz", submissionId, userIdHash, quizId: challengeId, runId: unsigned.runId, choiceIndex }, 95_000);
 }

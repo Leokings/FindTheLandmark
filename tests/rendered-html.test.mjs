@@ -22,7 +22,9 @@ test("server-renders the Find the Landmark game", async () => {
   assert.match(html, /PACK LIGHT/);
   assert.match(html, /START/);
   assert.match(html, /GENLAYER LIVE/);
-  assert.match(html, /PHOTO HUNTS/);
+  assert.match(html, /PHOTO HUNT/);
   assert.match(html, /QUICK PICKS/);
+  assert.match(html, /ATLAS QUIZZES/);
+  assert.match(html, /07 STOPS/);
   assert.doesNotMatch(html, /Your site is taking shape|codex-preview/);
 });

@@ -752,6 +752,221 @@ input:focus-visible {
   letter-spacing: 0.12em;
 }
 
+/* Quiz interludes look like oversized atlas field notes. */
+.checkpoint-quiz,
+.quiz-round {
+  background: var(--sun);
+}
+
+.checkpoint-quiz .checkpoint-top {
+  color: var(--ink);
+  text-shadow: none;
+}
+
+.checkpoint-quiz .checkpoint-top button {
+  border-color: var(--ink);
+  color: var(--ink);
+  background: var(--cream);
+}
+
+.checkpoint-quiz .checkpoint-top p span {
+  color: var(--cobalt);
+}
+
+.checkpoint-quiz .checkpoint-top strong {
+  color: var(--cream);
+  background: var(--ink);
+}
+
+.quiz-round {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: var(--ink);
+  background-image:
+    linear-gradient(rgba(23, 32, 25, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(23, 32, 25, 0.12) 1px, transparent 1px);
+  background-size: 42px 42px;
+}
+
+.quiz-round::before {
+  content: "FIELD NOTE";
+  position: absolute;
+  right: -0.04em;
+  bottom: -0.22em;
+  color: rgba(23, 32, 25, 0.08);
+  font-size: clamp(125px, 20vw, 320px);
+  font-weight: 950;
+  letter-spacing: -0.09em;
+  white-space: nowrap;
+  transform: rotate(-4deg);
+}
+
+.quiz-index {
+  position: absolute;
+  right: 5vw;
+  top: 14vh;
+  color: var(--coral);
+  font: 950 clamp(100px, 15vw, 220px)/0.8 var(--font-geist-mono), monospace;
+  letter-spacing: -0.12em;
+  transform: rotate(6deg);
+  text-shadow: 8px 9px 0 var(--ink);
+}
+
+.quiz-heading {
+  position: absolute;
+  z-index: 4;
+  top: 15vh;
+  left: clamp(30px, 7vw, 110px);
+  width: min(64vw, 900px);
+}
+
+.quiz-heading > span {
+  display: inline-block;
+  padding: 9px 12px;
+  border: 2px solid var(--ink);
+  color: var(--cream);
+  background: var(--cobalt);
+  box-shadow: 5px 5px 0 var(--ink);
+  font: 900 9px/1 var(--font-geist-mono), monospace;
+  letter-spacing: 0.13em;
+  transform: rotate(-2deg);
+}
+
+.quiz-heading > p {
+  margin: 24px 0 7px;
+  font: 900 9px/1 var(--font-geist-mono), monospace;
+  letter-spacing: 0.16em;
+}
+
+.quiz-heading h2 {
+  margin: 0;
+  max-width: 840px;
+  font-size: clamp(42px, 6.3vw, 94px);
+  line-height: 0.91;
+  letter-spacing: -0.065em;
+}
+
+.quiz-clock {
+  position: absolute;
+  z-index: 6;
+  right: 8vw;
+  top: 37vh;
+  width: 128px;
+  aspect-ratio: 1;
+  border: 3px solid var(--ink);
+  border-radius: 50%;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  color: var(--cream);
+  background: var(--coral);
+  box-shadow: 8px 9px 0 var(--ink);
+  transform: rotate(7deg);
+}
+
+.quiz-clock small {
+  font: 900 8px/1 var(--font-geist-mono), monospace;
+  letter-spacing: 0.13em;
+}
+
+.quiz-clock b {
+  margin-top: 7px;
+  font: 950 25px/1 var(--font-geist-mono), monospace;
+}
+
+.quiz-clock.urgent {
+  color: var(--ink);
+  background: var(--cream);
+  animation: pulse 700ms ease-in-out infinite alternate;
+}
+
+.quiz-options {
+  position: absolute;
+  z-index: 7;
+  left: clamp(28px, 7vw, 110px);
+  right: 6vw;
+  bottom: 7vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 3px solid var(--ink);
+  box-shadow: 10px 12px 0 var(--ink);
+}
+
+.quiz-options button {
+  appearance: none;
+  min-height: 74px;
+  padding: 14px 18px;
+  border: 0;
+  border-right: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  color: var(--ink);
+  background: var(--cream);
+  cursor: pointer;
+  text-align: left;
+  transition: background 150ms ease, color 150ms ease, transform 150ms ease;
+}
+
+.quiz-options button:nth-child(2n) {
+  border-right: 0;
+  background: var(--mint);
+}
+
+.quiz-options button:nth-child(n + 3) {
+  border-bottom: 0;
+}
+
+.quiz-options button:nth-child(3) {
+  background: #ffb9b0;
+}
+
+.quiz-options button:hover:not(:disabled) {
+  transform: translate(-4px, -4px);
+}
+
+.quiz-options button:disabled {
+  cursor: wait;
+}
+
+.quiz-options button.selected {
+  color: var(--cream);
+  background: var(--cobalt);
+}
+
+.quiz-options button span {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.quiz-options button b {
+  font-size: clamp(14px, 1.45vw, 20px);
+  line-height: 1.05;
+}
+
+.quiz-options button i {
+  font-style: normal;
+}
+
+.quiz-footnote {
+  position: absolute;
+  z-index: 7;
+  left: clamp(28px, 7vw, 110px);
+  bottom: 2.5vh;
+  margin: 0;
+  font: 900 8px/1 var(--font-geist-mono), monospace;
+  letter-spacing: 0.12em;
+}
+
 /* Photo hunt is intentionally a different composition */
 .checkpoint-hunt,
 .hunt-round {
@@ -1422,6 +1637,86 @@ input:focus-visible {
     font-size: 27px;
   }
 
+  .quiz-index {
+    top: 132px;
+    right: -5px;
+    font-size: 116px;
+    text-shadow: 5px 6px 0 var(--ink);
+  }
+
+  .quiz-heading {
+    top: 128px;
+    left: 18px;
+    width: calc(100vw - 36px);
+  }
+
+  .quiz-heading > span {
+    font-size: 8px;
+  }
+
+  .quiz-heading > p {
+    margin-top: 21px;
+  }
+
+  .quiz-heading h2 {
+    max-width: 92vw;
+    font-size: clamp(40px, 11.5vw, 64px);
+    line-height: 0.94;
+  }
+
+  .quiz-clock {
+    top: 61px;
+    right: 15px;
+    width: 72px;
+    border-width: 2px;
+    box-shadow: 4px 5px 0 var(--ink);
+  }
+
+  .quiz-clock b {
+    font-size: 17px;
+  }
+
+  .quiz-options {
+    left: 12px;
+    right: 12px;
+    bottom: 50px;
+    grid-template-columns: 1fr;
+    border-width: 2px;
+    box-shadow: 5px 6px 0 var(--ink);
+  }
+
+  .quiz-options button,
+  .quiz-options button:nth-child(2n),
+  .quiz-options button:nth-child(n + 3) {
+    min-height: 58px;
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--ink);
+  }
+
+  .quiz-options button:last-child {
+    border-bottom: 0;
+  }
+
+  .quiz-options button b {
+    font-size: 14px;
+  }
+
+  .quiz-footnote {
+    left: 13px;
+    bottom: 19px;
+    max-width: 90vw;
+    line-height: 1.35;
+  }
+
+  .checkpoint-quiz .checkpoint-rail {
+    bottom: 304px;
+  }
+
+  .checkpoint-quiz .floating-error {
+    bottom: 320px;
+  }
+
   .hunt-word {
     top: 40%;
     left: -8vw;
@@ -1537,8 +1832,17 @@ input:focus-visible {
     display: none;
   }
 
-  .ticket-strip li:nth-child(3) {
-    display: none;
+  .ticket-strip li {
+    padding: 8px 5px;
+    gap: 4px;
+  }
+
+  .ticket-strip b {
+    font-size: 20px;
+  }
+
+  .ticket-strip span {
+    font-size: 6px;
   }
 
   .signal-banner {
