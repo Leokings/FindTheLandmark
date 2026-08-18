@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "viem": "2.55.18"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
@@ -39,6 +40,9 @@
     "vinext": "1.0.0-beta.2",
     "vite": "8.0.13",
     "wrangler": "4.92.0"
+  },
+  "overrides": {
+    "ws": "8.21.0"
   },
   "type": "module"
 }

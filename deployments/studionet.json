@@ -1,0 +1,24 @@
+{
+  "network": "studionet",
+  "chainId": 61999,
+  "rpcUrl": "https://studio.genlayer.com/api",
+  "explorerUrl": "https://explorer-studio.genlayer.com",
+  "contractAddress": "0xE14e50069F700F4C72ca9d59c1eb950b04342b7a",
+  "deploymentTransaction": "0xc6b5329fc2c2fa9a382604c1245fcdfe1f98e5bd1893b69a3fac813589480929",
+  "sourceSha256": "18c461c15df32087a359913fa3f5ac7d32f7c99eef1b5a3d960cfeeb89e89e56",
+  "policyVersion": "find-the-landmark.photo-hunt.v1",
+  "admin": "0x797d3b25fb2cca0ff93f60df1910267f3822d655",
+  "relayer": "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec",
+  "hunts": [
+    {
+      "huntId": "hunt-colosseum-001",
+      "rewardXp": 250,
+      "creationTransaction": "0xdc5783f17c703d9919a42cb23e18132d013adf917edf0cec8aaf54406aae7018"
+    },
+    {
+      "huntId": "hunt-eiffel-001",
+      "rewardXp": 250,
+      "creationTransaction": "0xc4f9ea29aa32d2d9774d1a45b300d49339b5bc3ed6513a47eff1c4cc5a509552"
+    }
+  ]
+}

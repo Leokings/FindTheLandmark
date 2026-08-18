@@ -18,10 +18,15 @@ def as_address(value):
     return Address(value) if isinstance(value, bytes) else value
 
 
-def deploy_contract(direct_vm, direct_deploy, owner):
+def deploy_contract(direct_vm, direct_deploy, admin, relayer=None):
     setup_sdk_paths(Path("contracts/LandmarkHunt.py"), "v0.2.16")
-    direct_vm.sender = as_address(owner)
-    return direct_deploy("contracts/LandmarkHunt.py", as_address(owner))
+    relayer = relayer or admin
+    direct_vm.sender = as_address(admin)
+    return direct_deploy(
+        "contracts/LandmarkHunt.py",
+        as_address(admin),
+        as_address(relayer),
+    )
 
 
 def create_colosseum(contract):
@@ -72,7 +77,7 @@ def test_non_owner_cannot_create_hunt(direct_vm, direct_deploy, direct_alice, di
     contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
     direct_vm.sender = direct_bob
 
-    with direct_vm.expect_revert("Only the configured game relayer can create hunts"):
+    with direct_vm.expect_revert("Only the configured game admin can create hunts"):
         create_colosseum(contract)
 
 
@@ -88,6 +93,7 @@ def test_clear_matching_photo_wins_and_is_stored(direct_vm, direct_deploy, direc
     assert result["winner"] is True
     assert result["reward_xp"] == 250
     assert contract.get_result("submission-one")["accepted"] is True
+    assert contract.has_result("submission-one") is True
     winner = contract.get_winner("hunt-colosseum-001")
     assert winner["user_id_hash"] == USER_HASH
     assert winner["reward_xp"] == 250
@@ -147,3 +153,13 @@ def test_local_network_url_is_rejected(direct_vm, direct_deploy, direct_alice):
             "https://127.0.0.1/private.jpg",
             IMAGE_HASH,
         )
+
+
+def test_only_relayer_can_submit_proofs(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice, direct_bob)
+    create_colosseum(contract)
+
+    with direct_vm.expect_revert("Only the configured game relayer can submit proofs"):
+        submit(contract)

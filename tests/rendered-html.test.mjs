@@ -19,8 +19,9 @@ test("server-renders the Find the Landmark game", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>Find the Landmark/);
-  assert.match(html, /Know the world/);
-  assert.match(html, /PLAY TODAY/);
-  assert.match(html, /Five stops/);
+  assert.match(html, /THE WORLD IS/);
+  assert.match(html, /START THE RUN/);
+  assert.match(html, /STUDIONET LIVE/);
+  assert.match(html, /PHOTO HUNT/);
   assert.doesNotMatch(html, /Your site is taking shape|codex-preview/);
 });

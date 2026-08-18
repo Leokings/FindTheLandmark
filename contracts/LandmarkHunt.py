@@ -127,7 +127,8 @@ def _leader_error_matches(leaders_res, leader_fn) -> bool:
 
 
 class LandmarkHunt(gl.Contract):
-    owner: Address
+    admin: Address
+    relayer: Address
     policy_version: str
     hunt_json: TreeMap[str, str]
     hunt_exists: TreeMap[str, bool]
@@ -136,17 +137,21 @@ class LandmarkHunt(gl.Contract):
     result_json: TreeMap[str, str]
     result_exists: TreeMap[str, bool]
 
-    def __init__(self, relayer: Address):
+    def __init__(self, admin: Address, relayer: Address):
+        if admin == Address(b"\x00" * 20):
+            raise gl.vm.UserError("Admin must be a nonzero address")
         if relayer == Address(b"\x00" * 20):
             raise gl.vm.UserError("Relayer must be a nonzero address")
-        self.owner = relayer
+        self.admin = admin
+        self.relayer = relayer
         self.policy_version = POLICY_VERSION
 
     @gl.public.view
     def get_policy(self) -> dict:
         return {
             "policy_version": self.policy_version,
-            "owner": self.owner,
+            "admin": self.admin,
+            "relayer": self.relayer,
             "max_image_bytes": MAX_IMAGE_BYTES,
         }
 
@@ -159,8 +164,8 @@ class LandmarkHunt(gl.Contract):
         proof_instruction: str,
         reward_xp: int,
     ) -> dict:
-        if gl.message.sender_address != self.owner:
-            raise gl.vm.UserError("Only the configured game relayer can create hunts")
+        if gl.message.sender_address != self.admin:
+            raise gl.vm.UserError("Only the configured game admin can create hunts")
         normalized_id = _identifier(hunt_id, "Hunt ID")
         if self.hunt_exists.get(normalized_id, False):
             raise gl.vm.UserError("That hunt already exists")
@@ -200,6 +205,11 @@ class LandmarkHunt(gl.Contract):
             raise gl.vm.UserError("No result exists for that submission")
         return json.loads(self.result_json[normalized_id])
 
+    @gl.public.view
+    def has_result(self, submission_id: str) -> bool:
+        normalized_id = _identifier(submission_id, "Submission ID")
+        return self.result_exists.get(normalized_id, False)
+
     @gl.public.write
     def verify_photo(
         self,
@@ -209,7 +219,7 @@ class LandmarkHunt(gl.Contract):
         evidence_url: str,
         evidence_sha256: str,
     ) -> dict:
-        if gl.message.sender_address != self.owner:
+        if gl.message.sender_address != self.relayer:
             raise gl.vm.UserError("Only the configured game relayer can submit proofs")
 
         normalized_submission_id = _identifier(submission_id, "Submission ID")
