@@ -107,7 +107,7 @@ a:focus-visible {
   display: block;
 }
 
-.home-header > span {
+.home-header > .brand-name {
   padding-left: 22px;
 }
 
@@ -880,7 +880,7 @@ a:focus-visible {
     height: 38px;
   }
 
-  .home-header > span,
+  .home-header > .brand-name,
   .game-mark span {
     display: none;
   }

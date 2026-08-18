@@ -296,7 +296,7 @@ export default function Home() {
           <span className="home-mark">
             <Image className="brand-symbol" src="/favicon.svg" alt="Find the Landmark" width={48} height={48} priority />
           </span>
-          <span>FIND THE LANDMARK</span>
+          <span className="brand-name">FIND THE LANDMARK</span>
           <i>GENLAYER</i>
         </header>
 
