@@ -53,7 +53,8 @@ test("server-renders the Find the Landmark game", async (context) => {
 
   const html = await response.text();
   assert.match(html, /<title>Find the Landmark/);
-  assert.match(html, /<h1>FIND<br\/>THE <em>WORLD\.<\/em><\/h1>/);
+  assert.match(html, /<h1>TEST<br\/>YOUR<br\/><em>METTLE\.<\/em><\/h1>/);
+  assert.match(html, /class="brand-symbol"/);
   assert.match(html, /MAKE LOBBY/);
   assert.match(html, /50 MAX/);
   assert.match(html, /12.*ROUNDS/);

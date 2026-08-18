@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 const SESSION_KEY = "find-the-landmark.lobby.v1";
@@ -130,7 +131,10 @@ function GameHeader({ code, onExit }: { code: string; onExit: () => void }) {
   return (
     <header className="game-header">
       <button type="button" onClick={onExit} aria-label="Leave game">×</button>
-      <a href="#top" className="game-mark"><b>F/L</b><span>FIND THE LANDMARK</span></a>
+      <a href="#top" className="game-mark" aria-label="Find the Landmark">
+        <Image className="brand-symbol" src="/favicon.svg" alt="" width={42} height={42} priority />
+        <span>FIND THE LANDMARK</span>
+      </a>
       <span className="header-code">ROOM {code}</span>
     </header>
   );
@@ -289,14 +293,16 @@ export default function Home() {
     return (
       <main className="home-shell" id="top">
         <header className="home-header">
-          <b>F/L</b>
+          <span className="home-mark">
+            <Image className="brand-symbol" src="/favicon.svg" alt="Find the Landmark" width={48} height={48} priority />
+          </span>
           <span>FIND THE LANDMARK</span>
           <i>GENLAYER</i>
         </header>
 
         <section className="home-title">
           <p>LOBBY GAME · 50 MAX</p>
-          <h1>FIND<br />THE <em>WORLD.</em></h1>
+          <h1>TEST<br />YOUR<br /><em>METTLE.</em></h1>
           <div className="home-stats" aria-label="Game format">
             <span><b>50</b> PLAYERS</span>
             <span><b>12</b> ROUNDS</span>

@@ -93,14 +93,18 @@ a:focus-visible {
   grid-column: 1 / -1;
 }
 
-.home-header > b {
+.home-header > .home-mark {
   width: 76px;
   height: 76px;
   display: grid;
   place-items: center;
-  color: var(--acid);
   background: var(--ink);
-  font-size: 18px;
+}
+
+.brand-symbol {
+  width: 46px;
+  height: 46px;
+  display: block;
 }
 
 .home-header > span {
@@ -313,9 +317,9 @@ a:focus-visible {
   text-decoration: none;
 }
 
-.game-mark b {
-  color: var(--acid);
-  font-size: 18px;
+.game-mark .brand-symbol {
+  width: 36px;
+  height: 36px;
 }
 
 .header-code {
@@ -864,10 +868,16 @@ a:focus-visible {
     height: 62px;
   }
 
-  .home-header > b,
+  .home-header > .home-mark,
   .game-header > button {
     width: 62px;
     height: 62px;
+  }
+
+  .home-header .brand-symbol,
+  .game-mark .brand-symbol {
+    width: 38px;
+    height: 38px;
   }
 
   .home-header > span,
