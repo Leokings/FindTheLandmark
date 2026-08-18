@@ -14,12 +14,17 @@ const magickWasm = await Deno.readFile(
 );
 await initializeImageMagick(magickWasm);
 
-const CONTRACT_ADDRESS = "0xE14e50069F700F4C72ca9d59c1eb950b04342b7a";
+const CONTRACT_ADDRESS = "0xC3fD27d653D3298833836d239f014f184d85Aa8C";
 const EXPECTED_RELAYER = "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec";
 const SITE_SIGNER = "0x7060227c19040F2af4f066e5247B9e87E5F62132";
 const GENLAYER_RPC_URL = "https://studio.genlayer.com/api";
 const EXPLORER_URL = "https://explorer-studio.genlayer.com";
 const ALLOWED_HUNTS = new Set(["hunt-colosseum-001", "hunt-eiffel-001"]);
+const QUICK_PICK_IMAGES: Record<string, string> = {
+  "quick-taj-001": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/74/Taj_Mahal%2C_Agra%2C_India_edit2.jpg/1280px-Taj_Mahal%2C_Agra%2C_India_edit2.jpg",
+  "quick-redeemer-001": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Christtheredeemer.jpg/1280px-Christtheredeemer.jpg",
+  "quick-sydney-001": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Sydney_Opera_House_from_Circular_Quay.jpg/960px-Sydney_Opera_House_from_Circular_Quay.jpg",
+};
 const ALLOWED_IMAGE_HOSTS = new Set(["upload.wikimedia.org", "images.unsplash.com"]);
 const EVIDENCE_BUCKET = "landmark-evidence";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -165,6 +170,20 @@ async function mirrorEvidence(submissionId: string, sourceBytes: Uint8Array) {
   };
 }
 
+async function mirrorRoundEvidence(roundId: string, sourceBytes: Uint8Array) {
+  const bytes = normalizeEvidence(sourceBytes);
+  const objectPath = `rounds/${roundId}.jpg`;
+  const storage = storageAdmin();
+  const { error } = await storage.storage.from(EVIDENCE_BUCKET).upload(objectPath, bytes, {
+    contentType: "image/jpeg",
+    cacheControl: "86400",
+    upsert: true,
+  });
+  if (error) throw new Error("The landmark image could not be prepared for consensus.");
+  const { data } = storage.storage.from(EVIDENCE_BUCKET).getPublicUrl(objectPath);
+  return { evidenceUrl: data.publicUrl, evidenceSha256: await sha256Hex(bytes) };
+}
+
 async function waitForReceipt(client: GenLayerReadClient, transactionHash: string) {
   const deadline = Date.now() + RECEIPT_TIMEOUT_MS;
   let receipt: unknown = null;
@@ -237,15 +256,23 @@ async function verdictResponse(
 
   const result = await waitForResult(client, submissionId) as Record<string, unknown> | null;
   if (!result) return json({ status: "pending", ...metadata }, 202);
+  const kind = result.kind === "quick_pick" ? "quick_pick" : "photo_hunt";
   return json({
     status: result.accepted === true ? "accepted" : "rejected",
+    kind,
     rewardXp: Number(result.reward_xp ?? 0),
-    checks: {
-      targetMatch: result.target_match === true,
-      clearlyVisible: result.clearly_visible === true,
-      realPhoto: result.real_photo === true,
-      safe: result.safe === true,
-    },
+    ...(kind === "quick_pick" ? {
+      selectedIndex: Number(result.selected_index ?? -1),
+      correctIndex: Number(result.correct_index ?? -1),
+      confident: result.confident === true,
+    } : {
+      checks: {
+        targetMatch: result.target_match === true,
+        clearlyVisible: result.clearly_visible === true,
+        realPhoto: result.real_photo === true,
+        safe: result.safe === true,
+      },
+    }),
     ...metadata,
   });
 }
@@ -282,25 +309,50 @@ Deno.serve(async (request: Request) => {
       if (!/^0x[a-f0-9]{64}$/i.test(transactionHash)) return json({ error: "Invalid transaction." }, 400);
       return await verdictResponse(readClient, transactionHash, submissionId);
     }
-    if (action !== "submit") return json({ error: "Invalid action." }, 400);
-
     const userIdHash = typeof body.userIdHash === "string" ? body.userIdHash : "";
-    const huntId = typeof body.huntId === "string" ? body.huntId : "";
-    const evidenceUrl = normalizeEvidenceUrl(body.evidenceUrl);
     if (!/^[a-f0-9]{64}$/.test(userIdHash)) return json({ error: "Invalid player." }, 400);
-    if (!ALLOWED_HUNTS.has(huntId)) return json({ error: "That photo hunt is not active." }, 400);
-    if (!evidenceUrl) return json({ error: "Use a direct Wikimedia Commons or Unsplash image link." }, 400);
-
     const privateKey = Deno.env.get("GENLAYER_RELAYER_PRIVATE_KEY");
     if (!privateKey) return json({ error: "The GenLayer relayer is not configured." }, 503);
-    const sourceBytes = await downloadEvidence(evidenceUrl);
-    const mirrored = await mirrorEvidence(submissionId, sourceBytes);
     const account = createAccount(privateKey as `0x${string}`);
     if (String(account.address).toLowerCase() !== EXPECTED_RELAYER) {
       return json({ error: "The GenLayer relayer policy does not match." }, 503);
     }
     const client = createClient({ chain: studionet, endpoint: GENLAYER_RPC_URL, account });
     if (await client.getChainId() !== studionet.id) return json({ error: "Wrong GenLayer network." }, 503);
+
+    if (action === "quick_pick") {
+      const roundId = typeof body.roundId === "string" ? body.roundId : "";
+      const choiceIndex = Number(body.choiceIndex);
+      const sourceUrl = QUICK_PICK_IMAGES[roundId];
+      if (!sourceUrl) return json({ error: "That checkpoint is not active." }, 400);
+      if (!Number.isInteger(choiceIndex) || choiceIndex < 0 || choiceIndex > 3) {
+        return json({ error: "Choose one answer." }, 400);
+      }
+      const sourceBytes = await downloadEvidence(sourceUrl);
+      const mirrored = await mirrorRoundEvidence(roundId, sourceBytes);
+      await client.readContract({
+        address: CONTRACT_ADDRESS,
+        functionName: "get_quick_pick",
+        args: [roundId],
+        transactionHashVariant: "latest-nonfinal",
+      });
+      const transactionHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: "verify_pick",
+        leaderOnly: false,
+        args: [submissionId, userIdHash, roundId, choiceIndex, mirrored.evidenceUrl, mirrored.evidenceSha256],
+      });
+      const receipt = await waitForReceipt(client, transactionHash);
+      return await verdictResponse(client, transactionHash, submissionId, receipt);
+    }
+
+    if (action !== "submit") return json({ error: "Invalid action." }, 400);
+    const huntId = typeof body.huntId === "string" ? body.huntId : "";
+    const evidenceUrl = normalizeEvidenceUrl(body.evidenceUrl);
+    if (!ALLOWED_HUNTS.has(huntId)) return json({ error: "That photo hunt is not active." }, 400);
+    if (!evidenceUrl) return json({ error: "Use a direct Wikimedia Commons or Unsplash image link." }, 400);
+    const sourceBytes = await downloadEvidence(evidenceUrl);
+    const mirrored = await mirrorEvidence(submissionId, sourceBytes);
 
     const hunt = await client.readContract({
       address: CONTRACT_ADDRESS,
@@ -321,6 +373,7 @@ Deno.serve(async (request: Request) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/already has a winner/i.test(message)) return json({ error: "Someone already won this photo hunt." }, 409);
+    if (/already answered/i.test(message)) return json({ error: "This player already answered that checkpoint." }, 409);
     if (/image|evidence|HTTP/i.test(message)) return json({ error: message }, 400);
     console.error(`[landmark-api] ${message}`);
     return json({ error: "GenLayer could not verify this proof right now." }, 502);

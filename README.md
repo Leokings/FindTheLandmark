@@ -23,19 +23,19 @@ gltest tests/integration/ -v -s --network studionet
 
 ## GenLayer boundary
 
-The app handles deterministic A–D answers, timers, and the local run score. The deployed `contracts/LandmarkHunt.py` handles the subjective image decision and permanently locks the first consensus-accepted winner. XP for a photo hunt is awarded only after a genuine validator-majority result; leader-only fallback is not accepted.
+The site issues a signed 20-second ticket for each A–D round, then GenLayer validators independently inspect the landmark image and settle the answer. The same contract judges photo hunts and permanently locks the first consensus-accepted winner. XP is awarded only after a genuine validator-majority result.
 
 ## Live release
 
 - App: <https://find-the-landmark.plain3rd.chatgpt.site/>
 - Network: GenLayer Studionet (chain ID `61999`)
-- Contract: [`0xE14e…42b7a`](https://explorer-studio.genlayer.com/address/0xE14e50069F700F4C72ca9d59c1eb950b04342b7a)
-- Deployment and seeded-hunt transaction IDs: `deployments/studionet.json`
+- Contract: [`0xC3fD…5Aa8C`](https://explorer-studio.genlayer.com/address/0xC3fD27d653D3298833836d239f014f184d85Aa8C)
+- Deployment and seeded-round transaction IDs: `deployments/studionet.json`
 
 ## Project map
 
 - `app/` — playable web game
-- `contracts/LandmarkHunt.py` — GenLayer photo verifier and first-winner state
+- `contracts/LandmarkHunt.py` — GenLayer quick-pick and photo-hunt verifier
 - `supabase/functions/landmark-api/` — authenticated server relay and consensus gate
 - `tests/direct/` — direct-mode contract tests
 - `tests/integration/` — read-only checks against the deployed Studionet contract

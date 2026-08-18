@@ -2,10 +2,10 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 
 type IdentifyRound = {
   type: "identify";
+  roundId: "quick-taj-001" | "quick-redeemer-001" | "quick-sydney-001";
   place: string;
   city: string;
   image: string;
@@ -13,7 +13,6 @@ type IdentifyRound = {
   creditUrl: string;
   options: string[];
 };
-
 type HuntRound = {
   type: "hunt";
   huntId: "hunt-colosseum-001" | "hunt-eiffel-001";
@@ -21,19 +20,18 @@ type HuntRound = {
   city: string;
   clue: string;
 };
-
 type Round = IdentifyRound | HuntRound;
 type Screen = "home" | "playing" | "result" | "finished";
-type ResultKind =
-  | "correct"
-  | "wrong"
-  | "expired"
-  | "accepted"
-  | "rejected"
-  | "pending"
-  | "closed"
-  | "unverified";
-
+type ResultKind = "correct" | "wrong" | "expired" | "accepted" | "rejected" | "pending" | "closed" | "unverified";
+type VerifyState = "idle" | "preparing" | "checking";
+type QuickTicket = {
+  roundId: string;
+  userIdHash: string;
+  issuedAt: number;
+  expiresAt: number;
+  nonce: string;
+  signature: string;
+};
 type ProofResponse = {
   status?: "accepted" | "rejected" | "pending" | "not_verified";
   rewardXp?: number;
@@ -41,29 +39,30 @@ type ProofResponse = {
   submissionId?: string;
   consensusStatus?: string;
   explorerUrl?: string;
+  ticket?: QuickTicket;
+  seconds?: number;
   error?: string;
 };
 
-const CONTRACT_ADDRESS = "0xE14e50069F700F4C72ca9d59c1eb950b04342b7a";
+const CONTRACT_ADDRESS = "0xC3fD27d653D3298833836d239f014f184d85Aa8C";
 const EXPLORER_URL = "https://explorer-studio.genlayer.com";
-
 const rounds: Round[] = [
   {
     type: "identify",
+    roundId: "quick-taj-001",
     place: "Taj Mahal",
     city: "Agra, India",
-    image:
-      "https://upload.wikimedia.org/wikipedia/commons/thumb/7/74/Taj_Mahal%2C_Agra%2C_India_edit2.jpg/1280px-Taj_Mahal%2C_Agra%2C_India_edit2.jpg",
+    image: "https://upload.wikimedia.org/wikipedia/commons/thumb/7/74/Taj_Mahal%2C_Agra%2C_India_edit2.jpg/1280px-Taj_Mahal%2C_Agra%2C_India_edit2.jpg",
     credit: "Joel Godwin / Wikimedia Commons",
     creditUrl: "https://commons.wikimedia.org/wiki/File:Taj_Mahal,_Agra,_India_edit2.jpg",
     options: ["Humayun's Tomb", "Taj Mahal", "Lotus Temple", "Hawa Mahal"],
   },
   {
     type: "identify",
+    roundId: "quick-redeemer-001",
     place: "Christ the Redeemer",
     city: "Rio de Janeiro, Brazil",
-    image:
-      "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Christtheredeemer.jpg/1280px-Christtheredeemer.jpg",
+    image: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Christtheredeemer.jpg/1280px-Christtheredeemer.jpg",
     credit: "Wolffystyle / Wikimedia Commons",
     creditUrl: "https://commons.wikimedia.org/wiki/File:Christtheredeemer.jpg",
     options: ["Christ the Redeemer", "Cristo Rei", "The Motherland Calls", "Sacred Heart"],
@@ -77,10 +76,10 @@ const rounds: Round[] = [
   },
   {
     type: "identify",
+    roundId: "quick-sydney-001",
     place: "Sydney Opera House",
     city: "Sydney, Australia",
-    image:
-      "https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Sydney_Opera_House_from_Circular_Quay.jpg/960px-Sydney_Opera_House_from_Circular_Quay.jpg",
+    image: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Sydney_Opera_House_from_Circular_Quay.jpg/960px-Sydney_Opera_House_from_Circular_Quay.jpg",
     credit: "Richard Schneider / Wikimedia Commons",
     creditUrl: "https://commons.wikimedia.org/wiki/File:Sydney_Opera_House_from_Circular_Quay.jpg",
     options: ["The Guggenheim", "Marina Bay Sands", "Sydney Opera House", "Lotus Temple"],
@@ -93,55 +92,67 @@ const rounds: Round[] = [
     clue: "Find a real photo showing most of the tower clearly, not a cropped detail.",
   },
 ];
-
-const showcase = [rounds[0], rounds[1], rounds[3]] as IdentifyRound[];
+const previewRounds = rounds.filter((round): round is IdentifyRound => round.type === "identify");
 
 function roundTime(round: Round) {
   return round.type === "hunt" ? 90 : 20;
 }
-
 function timeLabel(value: number) {
   const minutes = Math.floor(value / 60);
   const seconds = value % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0");
 }
-
-function playerId() {
-  const key = "find-the-landmark.player.v1";
+function getPlayerId() {
+  const key = "find-the-landmark.player.v2";
   const existing = window.localStorage.getItem(key);
   if (existing && /^[A-Za-z0-9_-]{12,100}$/.test(existing)) return existing;
-  const created = `player-${crypto.randomUUID()}`;
+  const created = "player-" + crypto.randomUUID();
   window.localStorage.setItem(key, created);
   return created;
 }
-
-function wait(milliseconds: number, signal: AbortSignal) {
+function pause(milliseconds: number, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
       window.clearTimeout(timer);
       reject(new DOMException("Aborted", "AbortError"));
     };
-    const timer = window.setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, milliseconds);
-    if (signal.aborted) return onAbort();
-    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) return abort();
+    signal.addEventListener("abort", abort, { once: true });
   });
 }
-
-function resultMessage(resultKind: ResultKind, round: Round) {
-  const copy: Record<ResultKind, { kicker: string; title: string; body: string }> = {
-    correct: { kicker: "STAMP EARNED", title: "You know this place.", body: `${round.place} · ${round.city}` },
-    wrong: { kicker: "ROUTE MISSED", title: "Not this stop.", body: `The answer was ${round.place}.` },
-    expired: { kicker: "TIME'S UP", title: "The route moved on.", body: `This stop was ${round.place}.` },
-    accepted: { kicker: "FIRST PROOF ACCEPTED", title: "You claimed the landmark.", body: "Validator consensus locked your win on Studionet." },
-    rejected: { kicker: "PROOF NOT ACCEPTED", title: "That photo did not clear every check.", body: "Try a clearer, wider photo when this hunt appears again." },
-    pending: { kicker: "CONSENSUS PENDING", title: "Validators are still looking.", body: "Your transaction is live, but no final result was ready yet." },
-    closed: { kicker: "HUNT CLAIMED", title: "Another explorer got there first.", body: "The first accepted proof already won this landmark." },
-    unverified: { kicker: "NO CONSENSUS", title: "This proof was not finalized.", body: "No XP was awarded because validator consensus was not reached." },
+async function pollVerdict(endpoint: string, initial: ProofResponse, controller: AbortController) {
+  let data = initial;
+  const deadline = Date.now() + 120_000;
+  while (data.status === "pending" && data.transactionHash && data.submissionId && Date.now() < deadline) {
+    await pause(5_000, controller.signal);
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "status", transactionHash: data.transactionHash, submissionId: data.submissionId }),
+      signal: controller.signal,
+    });
+    const update = await response.json() as ProofResponse;
+    if (update.transactionHash) data = update;
+    if (!response.ok && data.status !== "not_verified" && response.status < 500) break;
+  }
+  return data;
+}
+function resultCopy(kind: ResultKind, round: Round) {
+  const messages: Record<ResultKind, { eyebrow: string; title: string; body: string }> = {
+    correct: { eyebrow: "VALIDATOR SEAL EARNED", title: "Correct landmark.", body: round.place + " · " + round.city },
+    wrong: { eyebrow: "CONSENSUS SAYS NO", title: "Wrong turn.", body: "The validators identified " + round.place + "." },
+    expired: { eyebrow: "GATE CLOSED", title: "Time escaped.", body: "The route moved before your answer was locked." },
+    accepted: { eyebrow: "FIRST PROOF WINS", title: "Landmark claimed.", body: "Your photo cleared validator consensus first." },
+    rejected: { eyebrow: "PROOF RETURNED", title: "Try a better angle.", body: "The image did not clear every proof check." },
+    pending: { eyebrow: "ROUTE ON HOLD", title: "Still checking.", body: "Your transaction is live and waiting for a final verdict." },
+    closed: { eyebrow: "FLAG ALREADY PLANTED", title: "Someone got there first.", body: "This photo hunt already has a winner." },
+    unverified: { eyebrow: "NO FINAL SEAL", title: "Couldn’t verify.", body: "No XP was awarded because consensus did not finish." },
   };
-  return copy[resultKind];
+  return messages[kind];
 }
 
 export default function Home() {
@@ -149,126 +160,177 @@ export default function Home() {
   const [roundIndex, setRoundIndex] = useState(0);
   const [seconds, setSeconds] = useState(roundTime(rounds[0]));
   const [score, setScore] = useState(0);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
   const [imageUrl, setImageUrl] = useState("");
-  const [verifyState, setVerifyState] = useState<"idle" | "checking">("idle");
-  const [proofError, setProofError] = useState("");
+  const [verifyState, setVerifyState] = useState<VerifyState>("idle");
+  const [quickTicket, setQuickTicket] = useState<QuickTicket | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
   const [resultKind, setResultKind] = useState<ResultKind>("correct");
   const [earnedXp, setEarnedXp] = useState(0);
   const [proofMeta, setProofMeta] = useState<ProofResponse | null>(null);
-  const answerTimer = useRef<number | null>(null);
-  const proofController = useRef<AbortController | null>(null);
-
+  const startController = useRef<AbortController | null>(null);
+  const verifyController = useRef<AbortController | null>(null);
   const round = rounds[roundIndex];
   const isLastRound = roundIndex === rounds.length - 1;
-  const progress = ((roundIndex + (screen === "result" ? 1 : 0)) / rounds.length) * 100;
-  const stageKey = `${screen}-${roundIndex}`;
+  const copy = resultCopy(resultKind, round);
+  const successful = resultKind === "correct" || resultKind === "accepted";
 
   useEffect(() => {
-    if (screen !== "playing" || seconds <= 0 || verifyState === "checking") return;
+    if (screen !== "playing" || round.type !== "identify") return;
+    const controller = new AbortController();
+    startController.current?.abort();
+    startController.current = controller;
+    fetch("/api/quick-pick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "start", roundId: round.roundId, playerId: getPlayerId() }),
+      signal: controller.signal,
+    })
+      .then(async (response) => ({ response, data: await response.json() as ProofResponse }))
+      .then(({ response, data }) => {
+        if (!response.ok || !data.ticket) throw new Error(data.error ?? "This checkpoint could not open.");
+        setQuickTicket(data.ticket);
+        setSeconds(data.seconds ?? 20);
+        setVerifyState("idle");
+      })
+      .catch((error) => {
+        if (!(error instanceof Error && error.name === "AbortError")) {
+          setErrorMessage(error instanceof Error ? error.message : "This checkpoint could not open.");
+          setVerifyState("idle");
+        }
+      });
+    return () => controller.abort();
+  }, [screen, roundIndex, round]);
+
+  useEffect(() => {
+    if (screen !== "playing" || seconds <= 0 || verifyState !== "idle") return;
+    if (round.type === "identify" && !quickTicket) return;
     const timer = window.setTimeout(() => {
       if (seconds === 1) {
         setSeconds(0);
         setEarnedXp(0);
         setResultKind("expired");
         setScreen("result");
-      } else {
-        setSeconds((value) => value - 1);
-      }
+      } else setSeconds((value) => value - 1);
     }, 1_000);
     return () => window.clearTimeout(timer);
-  }, [screen, seconds, verifyState]);
-
-  const resultCopy = resultMessage(resultKind, round);
+  }, [screen, seconds, verifyState, quickTicket, round.type]);
 
   useEffect(() => () => {
-    if (answerTimer.current !== null) window.clearTimeout(answerTimer.current);
-    proofController.current?.abort();
+    startController.current?.abort();
+    verifyController.current?.abort();
   }, []);
 
   function resetRound(index: number) {
-    proofController.current?.abort();
-    proofController.current = null;
+    startController.current?.abort();
+    verifyController.current?.abort();
     setRoundIndex(index);
     setSeconds(roundTime(rounds[index]));
     setSelected(null);
     setImageUrl("");
-    setVerifyState("idle");
-    setProofError("");
+    setQuickTicket(null);
+    setVerifyState(rounds[index].type === "identify" ? "preparing" : "idle");
+    setErrorMessage("");
     setProofMeta(null);
     setEarnedXp(0);
   }
-
   function beginRun() {
-    if (answerTimer.current !== null) window.clearTimeout(answerTimer.current);
     setScore(0);
     resetRound(0);
     setScreen("playing");
   }
-
-  function chooseAnswer(option: string) {
-    if (round.type !== "identify" || selected) return;
-    const correct = option === round.place;
-    const points = correct ? 100 + seconds * 2 : 0;
-    setSelected(option);
-    setResultKind(correct ? "correct" : "wrong");
-    setEarnedXp(points);
-    if (points) setScore((value) => value + points);
-    answerTimer.current = window.setTimeout(() => {
-      setScreen("result");
-      answerTimer.current = null;
-    }, 420);
+  function leaveRun() {
+    startController.current?.abort();
+    verifyController.current?.abort();
+    setScreen("home");
   }
 
-  async function submitProof() {
-    if (round.type !== "hunt" || verifyState === "checking") return;
+  async function chooseAnswer(choiceIndex: number) {
+    if (round.type !== "identify" || selected !== null || !quickTicket || verifyState !== "idle") return;
+    const ticket = quickTicket;
+    setSelected(choiceIndex);
+    setQuickTicket(null);
     setVerifyState("checking");
-    setProofError("");
-    proofController.current?.abort();
+    setErrorMessage("");
     const controller = new AbortController();
-    proofController.current = controller;
+    verifyController.current?.abort();
+    verifyController.current = controller;
     try {
-      let response = await fetch("/api/photo-hunt", {
+      const response = await fetch("/api/quick-pick", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ huntId: round.huntId, evidenceUrl: imageUrl, playerId: playerId() }),
+        body: JSON.stringify({ action: "submit", roundId: round.roundId, playerId: getPlayerId(), choiceIndex, ticket }),
         signal: controller.signal,
       });
       let data = await response.json() as ProofResponse;
       setProofMeta(data);
-      if (!response.ok && response.status !== 409 && data.status !== "not_verified") {
-        setProofError(data.error ?? "The proof could not be checked.");
+      if (response.status === 408) {
+        setResultKind("expired");
+        setScreen("result");
         return;
       }
-
-      const pollDeadline = Date.now() + 120_000;
-      while (
-        data.status === "pending"
-        && data.transactionHash
-        && data.submissionId
-        && Date.now() < pollDeadline
-      ) {
-        await wait(5_000, controller.signal);
-        response = await fetch("/api/photo-hunt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "status",
-            transactionHash: data.transactionHash,
-            submissionId: data.submissionId,
-          }),
-          signal: controller.signal,
-        });
-        const update = await response.json() as ProofResponse;
-        if (update.transactionHash) data = update;
-        setProofMeta(data);
-        if (!response.ok && data.status !== "not_verified") {
-          if (response.status >= 500) continue;
-          setProofError(data.error ?? "The proof could not be checked.");
-          return;
-        }
+      if (!response.ok && data.status !== "not_verified" && data.status !== "pending") {
+        setErrorMessage(data.error ?? "The answer could not be checked.");
+        setSelected(null);
+        return;
       }
+      if (data.status === "pending") {
+        data = await pollVerdict("/api/quick-pick", data, controller);
+        setProofMeta(data);
+      }
+      if (data.status === "accepted") {
+        const points = data.rewardXp ?? 100;
+        setResultKind("correct");
+        setEarnedXp(points);
+        setScore((value) => value + points);
+      } else if (data.status === "rejected") {
+        setResultKind("wrong");
+        setEarnedXp(0);
+      } else if (data.status === "pending") {
+        setResultKind("pending");
+        setEarnedXp(0);
+      } else {
+        setResultKind("unverified");
+        setEarnedXp(0);
+      }
+      setScreen("result");
+    } catch (error) {
+      if (!(error instanceof Error && error.name === "AbortError")) {
+        setErrorMessage("The validator route could not be reached. Try again.");
+        setSelected(null);
+      }
+    } finally {
+      if (verifyController.current === controller) {
+        verifyController.current = null;
+        setVerifyState("idle");
+      }
+    }
+  }
 
+  async function submitProof() {
+    if (round.type !== "hunt" || verifyState !== "idle") return;
+    setVerifyState("checking");
+    setErrorMessage("");
+    const controller = new AbortController();
+    verifyController.current?.abort();
+    verifyController.current = controller;
+    try {
+      const response = await fetch("/api/photo-hunt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ huntId: round.huntId, evidenceUrl: imageUrl, playerId: getPlayerId() }),
+        signal: controller.signal,
+      });
+      let data = await response.json() as ProofResponse;
+      setProofMeta(data);
+      if (!response.ok && response.status !== 409 && data.status !== "not_verified" && data.status !== "pending") {
+        setErrorMessage(data.error ?? "The proof could not be checked.");
+        return;
+      }
+      if (data.status === "pending") {
+        data = await pollVerdict("/api/photo-hunt", data, controller);
+        setProofMeta(data);
+      }
       if (response.status === 409) {
         setResultKind("closed");
         setEarnedXp(0);
@@ -289,12 +351,10 @@ export default function Home() {
       }
       setScreen("result");
     } catch (error) {
-      if (!(error instanceof Error && error.name === "AbortError")) {
-        setProofError("The live verifier could not be reached. Try again.");
-      }
+      if (!(error instanceof Error && error.name === "AbortError")) setErrorMessage("The proof route could not be reached. Try again.");
     } finally {
-      if (proofController.current === controller) {
-        proofController.current = null;
+      if (verifyController.current === controller) {
+        verifyController.current = null;
         setVerifyState("idle");
       }
     }
@@ -309,191 +369,130 @@ export default function Home() {
     setScreen("playing");
   }
 
-  function leaveRun() {
-    if (answerTimer.current !== null) window.clearTimeout(answerTimer.current);
-    answerTimer.current = null;
-    proofController.current?.abort();
-    proofController.current = null;
-    setScreen("home");
-  }
-
-  const successResult = resultKind === "correct" || resultKind === "accepted";
-
   return (
-    <main className="world-shell">
-      <div className="ambient-grid" aria-hidden="true" />
-      <header className="nav-shell">
-        <button className="wordmark" onClick={leaveRun} aria-label="Find the Landmark home">
-          <span className="logo-orbit"><i /></span>
-          <span>FIND THE<br /><b>LANDMARK</b></span>
-        </button>
-        <div className="nav-center" aria-label="Network status">
-          <span className="signal-dot" /> STUDIONET LIVE
-          <span className="nav-divider" />
-          <a href={EXPLORER_URL} target="_blank" rel="noreferrer" title={CONTRACT_ADDRESS}>
-            {CONTRACT_ADDRESS.slice(0, 6)}…{CONTRACT_ADDRESS.slice(-4)}
-          </a>
-        </div>
-        <div className="xp-counter"><span>RUN XP</span><strong>{score.toLocaleString()}</strong></div>
-      </header>
+    <main className={"atlas-app screen-" + screen}>
+      <div className="paper-noise" aria-hidden="true" />
+      <button className="edge-brand" onClick={leaveRun} aria-label="Find the Landmark home">
+        <span>F／L</span><b>FIND THE LANDMARK</b>
+      </button>
+      {screen === "home" && (
+        <section className="atlas-home">
+          <div className="atlas-meta">
+            <span>DAILY ROUTE 018</span><span>05 STOPS</span><span>GENLAYER LIVE</span>
+          </div>
+          <div className="map-field" aria-label="Today's world route">
+            <svg viewBox="0 0 1000 640" className="route-drawing" aria-hidden="true">
+              <path d="M92 432 C230 212 320 500 458 282 S718 130 908 342" />
+              <circle cx="92" cy="432" r="9" /><circle cx="458" cy="282" r="9" /><circle cx="908" cy="342" r="9" />
+            </svg>
+            {previewRounds.map((item, index) => (
+              <figure className={"map-photo map-photo-" + (index + 1)} key={item.roundId}>
+                <Image src={item.image} alt="" fill sizes="(max-width: 720px) 40vw, 22vw" priority={index === 0} />
+                <figcaption><b>0{index + 1}</b><span>{index === 0 ? "FIRST CLUE" : "SEALED"}</span></figcaption>
+              </figure>
+            ))}
+            <div className="map-stamp"><span>WORLD<br />ROUTE</span><b>018</b></div>
+            <div className="map-pin pin-one"><i />AGRA</div>
+            <div className="map-pin pin-two"><i />RIO</div>
+            <div className="map-pin pin-three"><i />SYDNEY</div>
+          </div>
+          <div className="home-title">
+            <p>ONE PHOTO. FOUR PLACES. TWENTY SECONDS.</p>
+            <h1>PACK LIGHT.<br /><em>THINK FAST.</em></h1>
+          </div>
+          <button className="start-orbit" onClick={beginRun}>
+            <span>START<br />TODAY&apos;S<br />ROUTE</span><i>↗</i>
+          </button>
+          <ol className="ticket-strip" aria-label="Route format">
+            <li><b>03</b><span>QUICK PICKS<small>100 XP EACH</small></span></li>
+            <li><b>02</b><span>PHOTO HUNTS<small>FIRST PROOF WINS</small></span></li>
+            <li><b>05</b><span>VALIDATOR STOPS<small>CONSENSUS SCORED</small></span></li>
+          </ol>
+        </section>
+      )}
 
-      <div key={stageKey} className="screen-stage">
-        {screen === "home" && (
-          <section className="landing-screen">
-            <div className="hero-copy">
-              <p className="micro-label"><span>✦</span> DAILY GEOGRAPHY RACE · ROUTE 018</p>
-              <h1>THE WORLD IS<br /><em>YOUR GAMEBOARD.</em></h1>
-              <p className="hero-lede">Name the landmark. Hunt down the proof. Be first when the validators agree.</p>
-              <div className="hero-actions">
-                <button className="launch-button" onClick={beginRun}><span>START THE RUN</span><i>↗</i></button>
-                <div className="route-facts">
-                  <span><b>05</b> stops</span>
-                  <span><b>02</b> live hunts</span>
-                  <span><b>01</b> winner each</span>
-                </div>
+      {(screen === "playing" || screen === "result") && (
+        <section className={"checkpoint checkpoint-" + round.type}>
+          <nav className="checkpoint-rail" aria-label="Route progress">
+            {rounds.map((item, index) => <span key={item.place + "-" + index} className={index === roundIndex ? "active" : index < roundIndex ? "done" : ""}>{String(index + 1).padStart(2, "0")}</span>)}
+          </nav>
+          <div className="checkpoint-top">
+            <button onClick={leaveRun} aria-label="Leave route">×</button>
+            <p><span>STOP {String(roundIndex + 1).padStart(2, "0")}</span>{round.type === "identify" ? "QUICK PICK" : "OPEN PHOTO HUNT"}</p>
+            <strong>{score} XP</strong>
+          </div>
+          {screen === "playing" && round.type === "identify" && (
+            <div className="image-round">
+              <figure className="landmark-canvas">
+                <Image src={round.image} alt="Landmark to identify" fill sizes="100vw" priority />
+                <div className="image-wash" />
+                <figcaption>IMAGE SOURCE · <a href={round.creditUrl} target="_blank" rel="noreferrer">{round.credit}</a></figcaption>
+              </figure>
+              <div className={"compass-clock " + (seconds <= 5 ? "urgent" : "")}>
+                <i /><small>LOCK IN</small><b>{timeLabel(seconds)}</b>
               </div>
-            </div>
-
-            <div className="world-visual" aria-label="Today's landmark route preview">
-              <div className="globe-lines" aria-hidden="true"><i /><i /><i /></div>
-              <div className="orbit orbit-one" aria-hidden="true"><span /></div>
-              <div className="orbit orbit-two" aria-hidden="true"><span /></div>
-              {showcase.map((item, index) => (
-                <figure className={`floating-card card-${index + 1}`} key={item.place}>
-                  <Image src={item.image} alt="" fill sizes="240px" />
-                  <figcaption><span>0{index + 1}</span><strong>{index === 1 ? "???" : item.place}</strong></figcaption>
-                </figure>
-              ))}
-              <div className="globe-core"><span>ROUTE<br /><b>018</b></span></div>
-              <div className="proof-pulse"><span>⬡</span><p>PROOF ENGINE<strong>GENLAYER CONSENSUS</strong></p></div>
-            </div>
-
-            <ol className="route-rail" aria-label="Today's five rounds">
-              {rounds.map((item, index) => (
-                <li key={`${item.place}-${index}`} className={item.type === "hunt" ? "is-hunt" : ""}>
-                  <span>0{index + 1}</span>
-                  <div><b>{item.type === "identify" ? "QUICK PICK" : "PHOTO HUNT"}</b><small>{item.type === "identify" ? "Everyone scores" : "First proof wins"}</small></div>
-                  <i>{item.type === "identify" ? "+100" : "+250"}</i>
-                </li>
-              ))}
-            </ol>
-          </section>
-        )}
-
-        {(screen === "playing" || screen === "result") && (
-          <section className="play-screen">
-            <div className="run-header">
-              <button className="icon-button" onClick={leaveRun} aria-label="Leave today's run">←</button>
-              <div className="round-title">
-                <p className="micro-label">CHECKPOINT {String(roundIndex + 1).padStart(2, "0")} / {String(rounds.length).padStart(2, "0")}</p>
-                <h2>{round.type === "identify" ? "Name the landmark" : `Find ${round.place}`}</h2>
-              </div>
-              <div className={`countdown ${seconds <= 5 ? "urgent" : ""}`}><span>TIME LEFT</span><strong>{timeLabel(seconds)}</strong></div>
-            </div>
-            <div className="run-progress"><span style={{ width: `${Math.max(progress, 3)}%` }} /></div>
-
-            {screen === "playing" && round.type === "identify" && (
-              <div className="identify-stage">
-                <figure className="quiz-photo">
-                  <Image src={round.image} alt="Landmark to identify" fill sizes="(max-width: 900px) 100vw, 58vw" priority />
-                  <div className="scan-line" aria-hidden="true" />
-                  <span className="coordinate-tag">UNKNOWN COORDINATES</span>
-                  <figcaption>Photo: <a href={round.creditUrl} target="_blank" rel="noreferrer">{round.credit}</a></figcaption>
-                </figure>
-                <div className="choice-console">
-                  <p className="micro-label"><span>●</span> QUICK PICK · SPEED BONUS ON</p>
-                  <h3>Where did we land?</h3>
-                  <p className="console-note">Choose one before the signal disappears.</p>
-                  <div className="choice-list">
-                    {round.options.map((option, index) => (
-                      <button
-                        key={option}
-                        style={{ "--choice-delay": `${index * 55}ms` } as CSSProperties}
-                        className={selected === option ? "choice selected" : "choice"}
-                        onClick={() => chooseAnswer(option)}
-                      >
-                        <span>{String.fromCharCode(65 + index)}</span><b>{option}</b><i>↗</i>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="reward-meter"><span>BASE REWARD</span><strong>100 XP</strong><small>+ {seconds * 2} speed</small></div>
-                </div>
-              </div>
-            )}
-
-            {screen === "playing" && round.type === "hunt" && (
-              <div className="hunt-stage">
-                <div className="target-card">
-                  <div className="radar-disc" aria-hidden="true"><span>⌖</span><i /><i /></div>
-                  <p className="micro-label"><span>●</span> LIVE PHOTO HUNT</p>
-                  <h3>{round.place}</h3>
-                  <p className="target-location">{round.city}</p>
-                  <div className="target-rule"><span>PROOF RULE</span><p>{round.clue}</p></div>
-                  <div className="hunt-bounty"><small>FIRST ACCEPTED PROOF</small><strong>250 XP</strong><span>ONE WINNER</span></div>
-                </div>
-
-                <div className="submit-console">
-                  <div className="console-topline"><span>PROOF UPLINK</span><i>SECURE RELAY · ONLINE</i></div>
-                  <h3>Found the right shot?</h3>
-                  <p>Paste a direct image link. Independent validators check the landmark and agree on the result.</p>
-                  <label htmlFor="image-url">DIRECT IMAGE URL</label>
-                  <div className="url-input">
-                    <span>↗</span>
-                    <input
-                      id="image-url"
-                      type="url"
-                      value={imageUrl}
-                      onChange={(event) => { setImageUrl(event.target.value); setProofError(""); }}
-                      placeholder="https://upload.wikimedia.org/...jpg"
-                      disabled={verifyState === "checking"}
-                      autoComplete="off"
-                    />
-                  </div>
-                  <div className="source-chips"><span>WIKIMEDIA COMMONS</span><span>UNSPLASH</span><small>direct JPG, PNG or WebP · max 8 MB</small></div>
-                  {proofError && <p className="proof-error" role="alert">{proofError}</p>}
-                  <button
-                    className="launch-button verify-button"
-                    onClick={submitProof}
-                    disabled={!imageUrl.startsWith("https://") || verifyState === "checking"}
-                  >
-                    {verifyState === "checking" ? <><span className="loading-copy">VALIDATORS ARE CHECKING</span><i className="loader" /></> : <><span>SEND LIVE PROOF</span><i>↗</i></>}
+              <div className="round-prompt"><span>WHERE ARE WE?</span><h2>Name this landmark.</h2></div>
+              <div className="answer-dock">
+                {round.options.map((option, index) => (
+                  <button key={option} className={selected === index ? "selected" : ""} onClick={() => chooseAnswer(index)} disabled={!quickTicket || selected !== null || verifyState !== "idle"}>
+                    <span>{String.fromCharCode(65 + index)}</span><b>{option}</b><i>↗</i>
                   </button>
-                  <div className="consensus-strip"><span>⬡</span><p><b>GENLAYER STUDIONET</b>XP is awarded only after validator-majority consensus.</p></div>
+                ))}
+              </div>
+              {verifyState === "preparing" && <div className="signal-banner"><i />OPENING THE 20-SECOND GATE</div>}
+              {verifyState === "checking" && <div className="validator-curtain"><i /><p>VALIDATORS ARE READING THE LANDMARK</p><span>Consensus decides the answer</span></div>}
+              {errorMessage && <div className="floating-error" role="alert">{errorMessage}</div>}
+            </div>
+          )}
+          {screen === "playing" && round.type === "hunt" && (
+            <div className="hunt-round">
+              <div className="hunt-word" aria-hidden="true">{round.place.replace("The ", "")}</div>
+              <div className="hunt-brief">
+                <span>FIRST ACCEPTED IMAGE</span>
+                <h2>Find<br />{round.place}.</h2>
+                <p>{round.city}</p>
+                <blockquote>{round.clue}</blockquote>
+              </div>
+              <div className="hunt-clock"><small>HUNT WINDOW</small><b>{timeLabel(seconds)}</b><span>250 XP · ONE WINNER</span></div>
+              <div className="dispatch-bar">
+                <label htmlFor="image-url">DROP A DIRECT IMAGE LINK</label>
+                <div className="dispatch-input">
+                  <span>↗</span>
+                  <input id="image-url" type="url" value={imageUrl} onChange={(event) => { setImageUrl(event.target.value); setErrorMessage(""); }} placeholder="https://upload.wikimedia.org/...jpg" disabled={verifyState === "checking"} autoComplete="off" />
+                  <button onClick={submitProof} disabled={!imageUrl.startsWith("https://") || verifyState !== "idle"}>
+                    {verifyState === "checking" ? "CHECKING…" : "CLAIM IT"}<i>→</i>
+                  </button>
                 </div>
+                <p>WIKIMEDIA OR UNSPLASH · JPG, PNG, WEBP · MAX 8 MB</p>
+                {errorMessage && <div className="dispatch-error" role="alert">{errorMessage}</div>}
               </div>
-            )}
+              <a className="chain-tag" href={EXPLORER_URL + "/contracts/" + CONTRACT_ADDRESS} target="_blank" rel="noreferrer">GENLAYER CONSENSUS ↗</a>
+            </div>
+          )}
+          {screen === "result" && (
+            <div className={"stamp-result " + (successful ? "success" : "miss")}>
+              <div className="result-cross" aria-hidden="true" />
+              <p>{copy.eyebrow}</p>
+              <h2>{copy.title}</h2>
+              <span>{copy.body}</span>
+              <div className="result-score">{earnedXp ? "+" + earnedXp : "0"}<small>XP</small></div>
+              {proofMeta?.transactionHash && <a href={proofMeta.explorerUrl ?? EXPLORER_URL + "/txs/" + proofMeta.transactionHash} target="_blank" rel="noreferrer">OPEN RECEIPT ↗</a>}
+              <button onClick={nextRound}>{isLastRound ? "FINISH ROUTE" : "NEXT STOP"}<i>→</i></button>
+            </div>
+          )}
+        </section>
+      )}
 
-            {screen === "result" && (
-              <div className={`result-stage ${successResult ? "is-success" : "is-miss"}`}>
-                {successResult && <div className="confetti" aria-hidden="true">{Array.from({ length: 12 }, (_, index) => <i key={index} />)}</div>}
-                <div className="result-glyph"><span>{successResult ? "✓" : resultKind === "pending" ? "…" : "×"}</span></div>
-                <p className="micro-label">{resultCopy.kicker}</p>
-                <h3>{resultCopy.title}</h3>
-                <p>{resultCopy.body}</p>
-                <strong className="xp-award">{earnedXp ? `+${earnedXp} XP` : "NO XP"}</strong>
-                {proofMeta?.transactionHash && (
-                  <a className="receipt-link" href={proofMeta.explorerUrl ?? `${EXPLORER_URL}/txs/${proofMeta.transactionHash}`} target="_blank" rel="noreferrer">
-                    VIEW CONSENSUS RECEIPT <span>↗</span>
-                  </a>
-                )}
-                <button className="launch-button result-next" onClick={nextRound}><span>{isLastRound ? "FINISH THE RUN" : "NEXT CHECKPOINT"}</span><i>→</i></button>
-              </div>
-            )}
-          </section>
-        )}
-
-        {screen === "finished" && (
-          <section className="finish-screen">
-            <div className="passport-stamp"><span>ROUTE<br /><b>COMPLETE</b></span></div>
-            <p className="micro-label"><span>✦</span> ALL FIVE CHECKPOINTS CLEARED</p>
-            <h1>YOU MADE IT<br /><em>AROUND THE WORLD.</em></h1>
-            <div className="score-board"><span>TODAY&apos;S RUN</span><strong>{score.toLocaleString()} XP</strong><small>Studionet proofs count only after consensus</small></div>
-            <button className="launch-button" onClick={beginRun}><span>RUN IT AGAIN</span><i>↻</i></button>
-          </section>
-        )}
-      </div>
-
-      <footer className="site-footer"><span>FIND THE LANDMARK · DAILY WORLD RACE</span><span>SUBJECTIVE PHOTO PROOFS SETTLED BY GENLAYER</span></footer>
+      {screen === "finished" && (
+        <section className="route-finished">
+          <div className="finish-sun"><span>ROUTE<br />COMPLETE</span></div>
+          <p>FIVE STOPS · ONE WORLD · VALIDATOR-SCORED</p>
+          <h1>YOUR PASSPORT<br />NEEDS MORE PAGES.</h1>
+          <div className="finish-score"><span>TODAY&apos;S HAUL</span><b>{score}</b><small>XP</small></div>
+          <button onClick={leaveRun}>BACK TO THE MAP <i>↗</i></button>
+          <a href={EXPLORER_URL + "/contracts/" + CONTRACT_ADDRESS} target="_blank" rel="noreferrer">VIEW LIVE CONTRACT ↗</a>
+        </section>
+      )}
     </main>
   );
 }

@@ -3,32 +3,39 @@
   "chainId": 61999,
   "rpcUrl": "https://studio.genlayer.com/api",
   "explorerUrl": "https://explorer-studio.genlayer.com",
-  "contractAddress": "0xE14e50069F700F4C72ca9d59c1eb950b04342b7a",
-  "deploymentTransaction": "0xc6b5329fc2c2fa9a382604c1245fcdfe1f98e5bd1893b69a3fac813589480929",
-  "sourceSha256": "18c461c15df32087a359913fa3f5ac7d32f7c99eef1b5a3d960cfeeb89e89e56",
-  "policyVersion": "find-the-landmark.photo-hunt.v1",
+  "contractAddress": "0xC3fD27d653D3298833836d239f014f184d85Aa8C",
+  "deploymentTransaction": "0x7e9bf3917d77cdd15435f1006c95144553578c3a5fd5dca97bc3274531d9fee0",
+  "sourceSha256": "ee7b5de1df55c61a41b8a2089f5cd054b39952e3f4e6e546fee5e2022e9a880b",
+  "policyVersion": "find-the-landmark.consensus-game.v2",
   "admin": "0x797d3b25fb2cca0ff93f60df1910267f3822d655",
   "relayer": "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec",
-  "liveVerification": {
-    "transaction": "0xaf6e8901a09aa4cc4d357e397f6699ecd2d1dc436b8bf5bc0512c544f02ea544",
-    "submissionId": "submission-c38de2b0-33f0-4047-91f9-c537dc22dd9a",
-    "huntId": "hunt-colosseum-001",
-    "result": "rejected",
-    "consensus": "MAJORITY_AGREE",
-    "validatorVotes": ["AGREE", "AGREE", "AGREE", "IDLE", "IDLE"],
-    "winnerRecorded": false,
-    "rewardXp": 0
-  },
+  "quickPicks": [
+    {
+      "roundId": "quick-taj-001",
+      "rewardXp": 100,
+      "creationTransaction": "0xb0d91b7c419043ec007aa9b22cd65f0f7cb92c61ee1e3d1ad541c1c62af45af1"
+    },
+    {
+      "roundId": "quick-redeemer-001",
+      "rewardXp": 100,
+      "creationTransaction": "0x273c8b4a9e43b76882436ffa81e850accc6420943660be29668f8df824851c58"
+    },
+    {
+      "roundId": "quick-sydney-001",
+      "rewardXp": 100,
+      "creationTransaction": "0x5254be43271e758fc5a84745df5997a14e323ba7b0542bd521c3eff5baf9b02b"
+    }
+  ],
   "hunts": [
     {
       "huntId": "hunt-colosseum-001",
       "rewardXp": 250,
-      "creationTransaction": "0xdc5783f17c703d9919a42cb23e18132d013adf917edf0cec8aaf54406aae7018"
+      "creationTransaction": "0x0711ba94605d50d093b927523dbf0072d0491677808c8bcb8d31972cb075a377"
     },
     {
       "huntId": "hunt-eiffel-001",
       "rewardXp": 250,
-      "creationTransaction": "0xc4f9ea29aa32d2d9774d1a45b300d49339b5bc3ed6513a47eff1c4cc5a509552"
+      "creationTransaction": "0x9af7341011d36f2625f3d146a60ee370003f7216f20b7603e9cb57d687b0e030"
     }
   ]
 }

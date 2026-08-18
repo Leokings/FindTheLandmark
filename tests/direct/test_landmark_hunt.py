@@ -39,6 +39,17 @@ def create_colosseum(contract):
     )
 
 
+def create_taj_pick(contract):
+    return contract.create_quick_pick(
+        "quick-taj-001",
+        "Humayun's Tomb",
+        "Taj Mahal",
+        "Lotus Temple",
+        "Hawa Mahal",
+        100,
+    )
+
+
 def mock_evidence(direct_vm):
     direct_vm.mock_web(r".*images\.example\.test/.*", {"status": 200, "body": IMAGE_BYTES})
 
@@ -54,11 +65,29 @@ def mock_verdict(direct_vm, **overrides):
     direct_vm.mock_llm(r".*judging one Find the Landmark photo-hunt submission.*", json.dumps(verdict))
 
 
+def mock_pick_verdict(direct_vm, correct_index=1, confident=True):
+    direct_vm.mock_llm(
+        r".*judging one Find the Landmark multiple-choice round.*",
+        json.dumps({"correct_index": correct_index, "confident": confident}),
+    )
+
+
 def submit(contract, submission_id="submission-one", user_hash=USER_HASH):
     return contract.verify_photo(
         submission_id,
         user_hash,
         "hunt-colosseum-001",
+        EVIDENCE_URL,
+        IMAGE_HASH,
+    )
+
+
+def submit_pick(contract, choice_index=1, submission_id="pick-submission-one", user_hash=USER_HASH):
+    return contract.verify_pick(
+        submission_id,
+        user_hash,
+        "quick-taj-001",
+        choice_index,
         EVIDENCE_URL,
         IMAGE_HASH,
     )
@@ -163,3 +192,65 @@ def test_only_relayer_can_submit_proofs(
 
     with direct_vm.expect_revert("Only the configured game relayer can submit proofs"):
         submit(contract)
+
+
+def test_owner_creates_quick_pick(direct_vm, direct_deploy, direct_alice):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
+    created = create_taj_pick(contract)
+
+    assert created["option_b"] == "Taj Mahal"
+    assert created["reward_xp"] == 100
+    assert contract.get_quick_pick("quick-taj-001")["option_d"] == "Hawa Mahal"
+
+
+def test_non_owner_cannot_create_quick_pick(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
+    direct_vm.sender = direct_bob
+
+    with direct_vm.expect_revert("Only the configured game admin can create quick picks"):
+        create_taj_pick(contract)
+
+
+def test_correct_quick_pick_is_accepted(direct_vm, direct_deploy, direct_alice):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
+    create_taj_pick(contract)
+    mock_evidence(direct_vm)
+    mock_pick_verdict(direct_vm)
+
+    result = submit_pick(contract)
+
+    assert result["kind"] == "quick_pick"
+    assert result["accepted"] is True
+    assert result["reward_xp"] == 100
+    assert result["correct_index"] == 1
+
+
+def test_wrong_quick_pick_is_rejected(direct_vm, direct_deploy, direct_alice):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
+    create_taj_pick(contract)
+    mock_evidence(direct_vm)
+    mock_pick_verdict(direct_vm)
+
+    result = submit_pick(contract, choice_index=0)
+
+    assert result["accepted"] is False
+    assert result["reward_xp"] == 0
+
+
+def test_player_only_gets_one_quick_pick_attempt(direct_vm, direct_deploy, direct_alice):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
+    create_taj_pick(contract)
+    mock_evidence(direct_vm)
+    mock_pick_verdict(direct_vm)
+    submit_pick(contract)
+
+    with direct_vm.expect_revert("already answered"):
+        submit_pick(contract, submission_id="pick-submission-two")
+
+
+def test_only_relayer_can_submit_quick_pick(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice, direct_bob)
+    create_taj_pick(contract)
+
+    with direct_vm.expect_revert("Only the configured game relayer can submit picks"):
+        submit_pick(contract)

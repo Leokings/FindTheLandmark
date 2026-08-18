@@ -12,6 +12,14 @@ Photo-hunt submissions follow a narrow server path:
 4. The function hashes that mirrored copy and submits its URL and digest through the configured GenLayer relayer.
 5. The function awards no result unless the receipt proves a successful, non-leader-only validator majority.
 
+Quick-pick answers use the same trust boundary:
+
+1. The same-origin route issues a short-lived, server-signed ticket when a round opens.
+2. A player locks one option before that ticket expires; the browser never sends a trusted answer key.
+3. The relay normalizes and mirrors the fixed landmark image, then submits the choice to GenLayer.
+4. Independent vision validators identify which of the four onchain options matches the image.
+5. The contract records correct or incorrect and awards the round's XP only after genuine consensus.
+
 ## GenLayer layer
 
 The intelligent contract owns only the decision that needs independent judgment:
