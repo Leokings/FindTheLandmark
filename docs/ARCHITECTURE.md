@@ -8,8 +8,9 @@ Photo-hunt submissions follow a narrow server path:
 
 1. The browser sends a supported public image URL to the same-origin Sites route.
 2. The route validates and rate-limits the request, creates the player hash and submission ID, then signs the exact payload.
-3. The Supabase Edge Function verifies that signature, downloads and hashes the image, and submits it through the configured GenLayer relayer.
-4. The function awards no result unless the receipt proves a successful, non-leader-only validator majority.
+3. The Supabase Edge Function verifies that signature, downloads the image once, normalizes it to a standard sRGB JPEG, and mirrors the exact bytes to a public evidence bucket so every validator sees a stable copy.
+4. The function hashes that mirrored copy and submits its URL and digest through the configured GenLayer relayer.
+5. The function awards no result unless the receipt proves a successful, non-leader-only validator majority.
 
 ## GenLayer layer
 

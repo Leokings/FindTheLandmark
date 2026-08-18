@@ -38,6 +38,7 @@ type ProofResponse = {
   status?: "accepted" | "rejected" | "pending" | "not_verified";
   rewardXp?: number;
   transactionHash?: string;
+  submissionId?: string;
   consensusStatus?: string;
   explorerUrl?: string;
   error?: string;
@@ -114,6 +115,21 @@ function playerId() {
   return created;
 }
 
+function wait(milliseconds: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    if (signal.aborted) return onAbort();
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function resultMessage(resultKind: ResultKind, round: Round) {
   const copy: Record<ResultKind, { kicker: string; title: string; body: string }> = {
     correct: { kicker: "STAMP EARNED", title: "You know this place.", body: `${round.place} · ${round.city}` },
@@ -141,6 +157,7 @@ export default function Home() {
   const [earnedXp, setEarnedXp] = useState(0);
   const [proofMeta, setProofMeta] = useState<ProofResponse | null>(null);
   const answerTimer = useRef<number | null>(null);
+  const proofController = useRef<AbortController | null>(null);
 
   const round = rounds[roundIndex];
   const isLastRound = roundIndex === rounds.length - 1;
@@ -166,9 +183,12 @@ export default function Home() {
 
   useEffect(() => () => {
     if (answerTimer.current !== null) window.clearTimeout(answerTimer.current);
+    proofController.current?.abort();
   }, []);
 
   function resetRound(index: number) {
+    proofController.current?.abort();
+    proofController.current = null;
     setRoundIndex(index);
     setSeconds(roundTime(rounds[index]));
     setSelected(null);
@@ -204,17 +224,49 @@ export default function Home() {
     if (round.type !== "hunt" || verifyState === "checking") return;
     setVerifyState("checking");
     setProofError("");
+    proofController.current?.abort();
+    const controller = new AbortController();
+    proofController.current = controller;
     try {
-      const response = await fetch("/api/photo-hunt", {
+      let response = await fetch("/api/photo-hunt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ huntId: round.huntId, evidenceUrl: imageUrl, playerId: playerId() }),
+        signal: controller.signal,
       });
-      const data = await response.json() as ProofResponse;
+      let data = await response.json() as ProofResponse;
       setProofMeta(data);
       if (!response.ok && response.status !== 409 && data.status !== "not_verified") {
         setProofError(data.error ?? "The proof could not be checked.");
         return;
+      }
+
+      const pollDeadline = Date.now() + 120_000;
+      while (
+        data.status === "pending"
+        && data.transactionHash
+        && data.submissionId
+        && Date.now() < pollDeadline
+      ) {
+        await wait(5_000, controller.signal);
+        response = await fetch("/api/photo-hunt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "status",
+            transactionHash: data.transactionHash,
+            submissionId: data.submissionId,
+          }),
+          signal: controller.signal,
+        });
+        const update = await response.json() as ProofResponse;
+        if (update.transactionHash) data = update;
+        setProofMeta(data);
+        if (!response.ok && data.status !== "not_verified") {
+          if (response.status >= 500) continue;
+          setProofError(data.error ?? "The proof could not be checked.");
+          return;
+        }
       }
 
       if (response.status === 409) {
@@ -236,10 +288,15 @@ export default function Home() {
         setEarnedXp(0);
       }
       setScreen("result");
-    } catch {
-      setProofError("The live verifier could not be reached. Try again.");
+    } catch (error) {
+      if (!(error instanceof Error && error.name === "AbortError")) {
+        setProofError("The live verifier could not be reached. Try again.");
+      }
     } finally {
-      setVerifyState("idle");
+      if (proofController.current === controller) {
+        proofController.current = null;
+        setVerifyState("idle");
+      }
     }
   }
 
@@ -255,6 +312,8 @@ export default function Home() {
   function leaveRun() {
     if (answerTimer.current !== null) window.clearTimeout(answerTimer.current);
     answerTimer.current = null;
+    proofController.current?.abort();
+    proofController.current = null;
     setScreen("home");
   }
 

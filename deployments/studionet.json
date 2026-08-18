@@ -9,6 +9,16 @@
   "policyVersion": "find-the-landmark.photo-hunt.v1",
   "admin": "0x797d3b25fb2cca0ff93f60df1910267f3822d655",
   "relayer": "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec",
+  "liveVerification": {
+    "transaction": "0xaf6e8901a09aa4cc4d357e397f6699ecd2d1dc436b8bf5bc0512c544f02ea544",
+    "submissionId": "submission-c38de2b0-33f0-4047-91f9-c537dc22dd9a",
+    "huntId": "hunt-colosseum-001",
+    "result": "rejected",
+    "consensus": "MAJORITY_AGREE",
+    "validatorVotes": ["AGREE", "AGREE", "AGREE", "IDLE", "IDLE"],
+    "winnerRecorded": false,
+    "rewardXp": 0
+  },
   "hunts": [
     {
       "huntId": "hunt-colosseum-001",

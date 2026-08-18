@@ -6,12 +6,17 @@ const ALLOWED_HUNTS = new Set(["hunt-colosseum-001", "hunt-eiffel-001"]);
 const ALLOWED_IMAGE_HOSTS = new Set(["upload.wikimedia.org", "images.unsplash.com"]);
 const REQUEST_WINDOW_MS = 10 * 60 * 1000;
 const MAX_REQUESTS_PER_WINDOW = 4;
+const MAX_STATUS_REQUESTS_PER_WINDOW = 30;
 const recentRequests = new Map<string, number[]>();
+const recentStatusRequests = new Map<string, number[]>();
 
 type PhotoHuntBody = {
+  action?: unknown;
   huntId?: unknown;
   evidenceUrl?: unknown;
   playerId?: unknown;
+  submissionId?: unknown;
+  transactionHash?: unknown;
 };
 
 function json(body: unknown, status = 200) {
@@ -50,49 +55,25 @@ function clientKey(request: Request) {
     ?? "unknown";
 }
 
-function isRateLimited(key: string) {
+function isRateLimited(key: string, requests = recentRequests, maximum = MAX_REQUESTS_PER_WINDOW) {
   const now = Date.now();
-  const active = (recentRequests.get(key) ?? []).filter((time) => now - time < REQUEST_WINDOW_MS);
-  if (active.length >= MAX_REQUESTS_PER_WINDOW) {
-    recentRequests.set(key, active);
+  const active = (requests.get(key) ?? []).filter((time) => now - time < REQUEST_WINDOW_MS);
+  if (active.length >= maximum) {
+    requests.set(key, active);
     return true;
   }
   active.push(now);
-  recentRequests.set(key, active);
+  requests.set(key, active);
   return false;
 }
 
-export async function POST(request: Request) {
-  if (isRateLimited(clientKey(request))) {
-    return json({ error: "Too many proof attempts. Try again in a few minutes." }, 429);
-  }
-
-  let input: PhotoHuntBody;
-  try {
-    input = await request.json() as PhotoHuntBody;
-  } catch {
-    return json({ error: "The proof request was not valid JSON." }, 400);
-  }
-
-  const huntId = typeof input.huntId === "string" ? input.huntId : "";
-  const evidenceUrl = normalizeUrl(input.evidenceUrl);
-  const playerId = typeof input.playerId === "string" ? input.playerId.trim() : "";
-  if (!ALLOWED_HUNTS.has(huntId)) return json({ error: "That photo hunt is not active." }, 400);
-  if (!evidenceUrl) {
-    return json({ error: "Use a direct Wikimedia Commons or Unsplash HTTPS image link." }, 400);
-  }
-  if (!/^[A-Za-z0-9_-]{12,100}$/.test(playerId)) {
-    return json({ error: "The player session is invalid. Refresh and try again." }, 400);
-  }
-
+async function forwardSigned(body: Record<string, string>, timeoutMs: number) {
   const privateKey = process.env.LANDMARK_SITE_SIGNING_KEY;
   if (!privateKey || !/^0x[a-fA-F0-9]{64}$/.test(privateKey)) {
     return json({ error: "Live verification is temporarily unavailable." }, 503);
   }
 
-  const submissionId = `submission-${crypto.randomUUID()}`;
-  const userIdHash = await sha256Hex(`find-the-landmark:${playerId}`);
-  const forwardedBody = JSON.stringify({ submissionId, userIdHash, huntId, evidenceUrl });
+  const forwardedBody = JSON.stringify(body);
   const timestamp = String(Date.now());
   const nonce = crypto.randomUUID();
   const bodyHash = await sha256Hex(forwardedBody);
@@ -101,7 +82,7 @@ export async function POST(request: Request) {
   const signature = await account.signMessage({ message });
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 95_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(EDGE_FUNCTION_URL, {
       method: "POST",
@@ -125,4 +106,43 @@ export async function POST(request: Request) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function POST(request: Request) {
+  let input: PhotoHuntBody;
+  try {
+    input = await request.json() as PhotoHuntBody;
+  } catch {
+    return json({ error: "The proof request was not valid JSON." }, 400);
+  }
+
+  if (input.action === "status") {
+    if (isRateLimited(clientKey(request), recentStatusRequests, MAX_STATUS_REQUESTS_PER_WINDOW)) {
+      return json({ error: "Too many status checks. Open the receipt and try again shortly." }, 429);
+    }
+    const submissionId = typeof input.submissionId === "string" ? input.submissionId : "";
+    const transactionHash = typeof input.transactionHash === "string" ? input.transactionHash : "";
+    if (!/^submission-[a-f0-9-]{36}$/i.test(submissionId)) return json({ error: "Invalid submission." }, 400);
+    if (!/^0x[a-f0-9]{64}$/i.test(transactionHash)) return json({ error: "Invalid transaction." }, 400);
+    return forwardSigned({ action: "status", submissionId, transactionHash }, 25_000);
+  }
+
+  if (isRateLimited(clientKey(request))) {
+    return json({ error: "Too many proof attempts. Try again in a few minutes." }, 429);
+  }
+
+  const huntId = typeof input.huntId === "string" ? input.huntId : "";
+  const evidenceUrl = normalizeUrl(input.evidenceUrl);
+  const playerId = typeof input.playerId === "string" ? input.playerId.trim() : "";
+  if (!ALLOWED_HUNTS.has(huntId)) return json({ error: "That photo hunt is not active." }, 400);
+  if (!evidenceUrl) {
+    return json({ error: "Use a direct Wikimedia Commons or Unsplash HTTPS image link." }, 400);
+  }
+  if (!/^[A-Za-z0-9_-]{12,100}$/.test(playerId)) {
+    return json({ error: "The player session is invalid. Refresh and try again." }, 400);
+  }
+
+  const submissionId = `submission-${crypto.randomUUID()}`;
+  const userIdHash = await sha256Hex(`find-the-landmark:${playerId}`);
+  return forwardSigned({ action: "submit", submissionId, userIdHash, huntId, evidenceUrl }, 95_000);
 }
