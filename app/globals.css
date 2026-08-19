@@ -898,7 +898,7 @@ a:focus-visible {
 
   .home-title h1 {
     margin: 60px 0;
-    font-size: clamp(70px, 22vw, 108px);
+    font-size: clamp(60px, 20vw, 96px);
   }
 
   .home-stats b {
