@@ -27,3 +27,4 @@ The Results tab opens the final leaderboard for any completed game code.
 - [Live app](https://find-the-landmark.vercel.app/)
 - [StudioNet contract](https://explorer-studio.genlayer.com/address/0x198b1027F8eF524BEC3DA10a021b728FD071D7DB)
 - Deployment record: `deployments/studionet.json`
+- Production test: `docs/TEST-EVIDENCE.md`
