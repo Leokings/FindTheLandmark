@@ -215,6 +215,14 @@ export default function Home() {
 
   const gameStatus = game?.status;
   useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0 });
+      document.querySelector<HTMLElement>(".round-layout")?.scrollTo({ top: 0, left: 0 });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [game?.code, game?.currentRoundIndex, gameStatus]);
+
+  useEffect(() => {
     if (!session || !gameStatus || gameStatus === "finished" || gameStatus === "error") return;
     let active = true;
     let timer = 0;
