@@ -492,6 +492,12 @@ export default function Home() {
   const you = game.leaderboard.find((entry) => entry.isYou);
   const duration = round ? Math.max(1, Date.parse(round.endsAt) - Date.parse(round.startedAt)) : 1;
   const timerPercent = round ? Math.max(0, Math.min(100, ((Date.parse(round.endsAt) - now) / duration) * 100)) : 0;
+  const questionLength = round?.question.trim().length ?? 0;
+  const questionSize = questionLength > 64
+    ? "question-long"
+    : questionLength > 46
+      ? "question-medium"
+      : "question-short";
 
   return (
     <main className="game-shell round-shell" id="top">
@@ -518,7 +524,7 @@ export default function Home() {
                 SOURCE · {round.sourceLabel ?? "GENLAYER DOCS"} ↗
               </a>
             )}
-            <h1>{round?.question}</h1>
+            <h1 className={questionSize}>{round?.question}</h1>
           </div>
         </section>
         <section className="answer-panel">
