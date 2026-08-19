@@ -15,7 +15,7 @@ const magickWasm = await Deno.readFile(
 );
 await initializeImageMagick(magickWasm);
 
-const CONTRACT_ADDRESS = "0x61C8B24da6DfB8A4C3eCb035C199114f284677eD";
+const CONTRACT_ADDRESS = "0x198b1027F8eF524BEC3DA10a021b728FD071D7DB";
 const EXPECTED_RELAYER = "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec";
 const SITE_SIGNERS = [
   "0xdc2606D6c7833178fFF3D456ADEF8d97029ea196",
@@ -27,7 +27,7 @@ const ALLOWED_IMAGE_HOSTS = new Set(["upload.wikimedia.org"]);
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_NORMALIZED_DIMENSION = 1_280;
 const MAX_CLOCK_SKEW_MS = 2 * 60 * 1000;
-const NONCE_RETENTION_MS = 10 * 60 * 1000;
+const RATE_WINDOW_SECONDS = 10 * 60;
 const GAME_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 type DatabaseClient = ReturnType<typeof createClient>;
@@ -143,11 +143,35 @@ async function claimNonce(db: DatabaseClient, nonce: string) {
   const { error } = await db.from("landmark_request_nonces").insert({ nonce });
   if (error?.code === "23505") return false;
   if (error) throw error;
-  await db
-    .from("landmark_request_nonces")
-    .delete()
-    .lt("received_at", new Date(Date.now() - NONCE_RETENTION_MS).toISOString());
   return true;
+}
+
+async function enforceRateLimit(db: DatabaseClient, body: Record<string, unknown>) {
+  const action = String(body.action ?? "");
+  const ipHash = typeof body.requestIpHash === "string" ? body.requestIpHash : "";
+  if (!/^[a-f0-9]{64}$/.test(ipHash)) throw new Error("INVALID_RATE_KEY");
+
+  const playerKey = normalizePlayerKey(body.playerId) ?? "anonymous";
+  const code = normalizeCode(body.code) ?? "none";
+  const policy = action === "create"
+    ? { key: `create:${ipHash}`, limit: 20 }
+    : action === "join"
+    ? { key: `join:${code}:${ipHash}`, limit: 120 }
+    : action === "results"
+    ? { key: `results:${code}:${ipHash}`, limit: 120 }
+    : action === "state"
+    ? { key: `state:${playerKey}`, limit: 300 }
+    : action === "answer"
+    ? { key: `answer:${playerKey}`, limit: 40 }
+    : { key: `start:${playerKey}`, limit: 20 };
+
+  const { data, error } = await db.rpc("landmark_take_rate_limit", {
+    p_key_hash: await sha256Hex(`landmark-rate:${policy.key}`),
+    p_limit: policy.limit,
+    p_window_seconds: RATE_WINDOW_SECONDS,
+  });
+  if (error) throw error;
+  if (data !== true) throw new Error("RATE_LIMITED");
 }
 
 function normalizePlayerKey(value: unknown) {
@@ -257,17 +281,22 @@ function normalizeEvidence(bytes: Uint8Array) {
   });
 }
 
-async function mirrorRoundEvidence(db: DatabaseClient, gameId: string, position: number, sourceUrl: string) {
+async function mirrorRoundEvidence(db: DatabaseClient, sourceUrl: string) {
   const normalized = normalizeEvidence(await downloadEvidence(sourceUrl));
-  const objectPath = `games/${gameId}/round-${position}.jpg`;
+  const evidenceSha256 = await sha256Hex(normalized);
+  const objectPath = `content/${evidenceSha256}.jpg`;
   const { error } = await db.storage.from(EVIDENCE_BUCKET).upload(objectPath, normalized, {
     contentType: "image/jpeg",
-    cacheControl: "86400",
-    upsert: true,
+    cacheControl: "31536000",
+    upsert: false,
   });
-  if (error) throw new Error("Round image could not be prepared.");
+  if (
+    error
+    && !/already exists|duplicate/i.test(error.message)
+    && String((error as unknown as Record<string, unknown>).statusCode ?? "") !== "409"
+  ) throw new Error("Round image could not be prepared.");
   const { data } = db.storage.from(EVIDENCE_BUCKET).getPublicUrl(objectPath);
-  return { evidenceUrl: data.publicUrl, evidenceSha256: await sha256Hex(normalized) };
+  return { evidenceUrl: data.publicUrl, evidenceSha256 };
 }
 
 async function genlayerClients() {
@@ -322,7 +351,6 @@ async function submitRound(
   round: RoundRow,
   writeClient: GenLayerWriteClient,
 ) {
-  const challenge = game.plan[round.position];
   const [{ data: players, error: playerError }, { data: answers, error: answerError }] = await Promise.all([
     db.from("landmark_game_players").select("id,player_hash").eq("game_id", game.id),
     db.from("landmark_game_answers").select("player_id,choice_index,elapsed_ms").eq("round_id", round.id),
@@ -335,15 +363,6 @@ async function submitRound(
     elapsed_ms: answer.elapsed_ms,
   })).filter((answer) => typeof answer.player_hash === "string");
 
-  let evidenceUrl = "";
-  let evidenceSha256 = "";
-  if (challenge.kind === "identify") {
-    if (!challenge.image) throw new Error("Round image is missing.");
-    const mirrored = await mirrorRoundEvidence(db, game.id, round.position, challenge.image);
-    evidenceUrl = mirrored.evidenceUrl;
-    evidenceSha256 = mirrored.evidenceSha256;
-  }
-
   const transactionHash = await writeClient.writeContract({
     address: CONTRACT_ADDRESS as `0x${string}`,
     functionName: "settle_round",
@@ -352,8 +371,6 @@ async function submitRound(
       game.contract_game_id,
       round.position,
       JSON.stringify(contractAnswers),
-      evidenceUrl,
-      evidenceSha256,
     ],
   });
   const { error } = await db
@@ -406,11 +423,15 @@ async function checkPendingRound(
     .maybeSingle();
   if (error || !round?.transaction_hash) return;
 
-  await db
+  const { data: claimedRound } = await db
     .from("landmark_game_rounds")
     .update({ next_check_at: new Date(Date.now() + 5_000).toISOString() })
     .eq("id", round.id)
-    .eq("status", "pending");
+    .eq("status", "pending")
+    .lte("next_check_at", now)
+    .select("*")
+    .maybeSingle();
+  if (!claimedRound) return;
 
   let receipt: unknown;
   try {
@@ -440,7 +461,7 @@ async function checkPendingRound(
     address: CONTRACT_ADDRESS,
     functionName: "get_round_result",
     args: [game.contract_game_id, round.position],
-    transactionHashVariant: "latest-nonfinal",
+    stateStatus: "finalized",
   }) as Record<string, unknown>;
   const scores = Array.isArray(result.scores) ? result.scores : [];
   const correctIndex = Number(result.correct_index);
@@ -492,7 +513,7 @@ async function progressGame(db: DatabaseClient, originalGame: GameRow) {
         address: CONTRACT_ADDRESS,
         functionName: "get_game",
         args: [game.contract_game_id],
-        transactionHashVariant: "latest-nonfinal",
+        stateStatus: "finalized",
       });
       await openRound(db, game, 0);
     }
@@ -539,7 +560,7 @@ async function progressGame(db: DatabaseClient, originalGame: GameRow) {
   await checkPendingRound(db, game, readClient);
 }
 
-async function gameState(db: DatabaseClient, gameId: string, playerId: string) {
+async function gameState(db: DatabaseClient, gameId: string, playerId: string | null) {
   const [{ data: game, error: gameError }, { data: players, error: playersError }, { data: rounds, error: roundsError }] = await Promise.all([
     db.from("landmark_games").select("*").eq("id", gameId).single(),
     db.from("landmark_game_players").select("*").eq("game_id", gameId).order("score", { ascending: false }).order("joined_at", { ascending: true }),
@@ -547,20 +568,24 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string) {
   ]);
   if (gameError || playersError || roundsError) throw gameError ?? playersError ?? roundsError;
   const currentGame = game as GameRow;
-  const player = (players as PlayerRow[]).find((entry) => entry.id === playerId);
-  if (!player) throw new Error("INVALID_SESSION");
+  const player = playerId
+    ? (players as PlayerRow[]).find((entry) => entry.id === playerId) ?? null
+    : null;
+  if (playerId && !player) throw new Error("INVALID_SESSION");
 
   let currentRound: Record<string, unknown> | null = null;
   if (currentGame.status === "running" && currentGame.current_round >= 0 && currentGame.current_round < currentGame.round_count) {
     const round = (rounds as RoundRow[]).find((entry) => entry.position === currentGame.current_round);
     const challenge = currentGame.plan[currentGame.current_round];
     if (round && challenge) {
-      const { data: answer } = await db
-        .from("landmark_game_answers")
-        .select("choice_index,submitted_at")
-        .eq("round_id", round.id)
-        .eq("player_id", player.id)
-        .maybeSingle();
+      const answer = player
+        ? (await db
+          .from("landmark_game_answers")
+          .select("choice_index,submitted_at")
+          .eq("round_id", round.id)
+          .eq("player_id", player.id)
+          .maybeSingle()).data
+        : null;
       currentRound = {
         id: round.id,
         position: round.position,
@@ -586,7 +611,7 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string) {
     displayName: entry.display_name,
     score: entry.score,
     isHost: entry.is_host,
-    isYou: entry.id === player.id,
+    isYou: entry.id === player?.id,
   }));
   const settledRounds = (rounds as RoundRow[]).filter((round) => round.status === "settled").length;
   const pendingRounds = (rounds as RoundRow[]).filter((round) => ["submitting", "pending"].includes(round.status)).length;
@@ -596,8 +621,9 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string) {
 
   return {
     code: currentGame.code,
+    realtimeGameId: currentGame.id,
     status: currentGame.status,
-    isHost: player.is_host,
+    isHost: player?.is_host ?? false,
     maxPlayers: currentGame.max_players,
     playerCount: board.length,
     roundCount: currentGame.round_count,
@@ -610,6 +636,20 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string) {
     error: currentGame.error_message,
     contractAddress: CONTRACT_ADDRESS,
   };
+}
+
+async function gameResults(db: DatabaseClient, body: Record<string, unknown>) {
+  const code = normalizeCode(body.code);
+  if (!code) return json({ error: "Invalid game code." }, 400);
+  const { data: game, error } = await db
+    .from("landmark_games")
+    .select("id,status")
+    .eq("code", code)
+    .maybeSingle();
+  if (error) throw error;
+  if (!game) return json({ error: "Game not found." }, 404);
+  if (game.status !== "finished") return json({ error: "Results not ready." }, 409);
+  return json(await gameState(db, game.id, null));
 }
 
 async function createLobby(db: DatabaseClient, body: Record<string, unknown>) {
@@ -677,6 +717,7 @@ async function joinLobby(db: DatabaseClient, body: Record<string, unknown>) {
       .eq("id", existing.id)
       .select("*")
       .single();
+    if (error?.code === "23505") return json({ error: "Name already taken." }, 409);
     if (error) throw error;
     return json({ playerToken, ...(await gameState(db, game.id, player.id)) });
   }
@@ -694,6 +735,7 @@ async function joinLobby(db: DatabaseClient, body: Record<string, unknown>) {
     .select("*")
     .single();
   if (error) {
+    if (error.code === "23505") return json({ error: "Name already taken." }, 409);
     if (/lobby is full/i.test(error.message)) return json({ error: "Lobby is full." }, 409);
     if (/game already started/i.test(error.message)) return json({ error: "That game has already started." }, 409);
     throw error;
@@ -714,7 +756,12 @@ async function startGame(
     .eq("game_id", game.id)
     .order("joined_at", { ascending: true });
   if (playersError || !players?.length) throw playersError ?? new Error("Lobby has no players.");
-  const plan = createGamePlan();
+  if (players.length < 2) return json({ error: "Need 2 players." }, 409);
+  const plan = await Promise.all(createGamePlan().map(async (round) => {
+    if (round.kind !== "identify") return round;
+    if (!round.image) throw new Error("Round image is missing.");
+    return { ...round, ...(await mirrorRoundEvidence(db, round.image)) };
+  }));
   const onchainPlan = contractPlan(plan);
   const contractGameId = `game-${game.id}`;
   const planText = JSON.stringify(onchainPlan);
@@ -799,8 +846,10 @@ Deno.serve(async (request: Request) => {
   try {
     const db = database();
     if (!(await claimNonce(db, nonce))) return json({ error: "Unauthorized request." }, 401);
+    await enforceRateLimit(db, body);
     if (body.action === "create") return await createLobby(db, body);
     if (body.action === "join") return await joinLobby(db, body);
+    if (body.action === "results") return await gameResults(db, body);
 
     const { game, player } = await requireSession(db, body);
     if (body.action === "start") {
@@ -835,6 +884,7 @@ Deno.serve(async (request: Request) => {
         if (error.code === "23505") return json({ error: "Answer already locked." }, 409);
         throw error;
       }
+      return json({ accepted: true, roundId: round.id, selectedIndex: choiceIndex });
     } else if (body.action !== "state") {
       return json({ error: "Invalid action." }, 400);
     }
@@ -846,6 +896,8 @@ Deno.serve(async (request: Request) => {
     const message = caught instanceof Error ? caught.message : String(caught);
     if (message === "GAME_NOT_FOUND") return json({ error: "Lobby not found." }, 404);
     if (message === "INVALID_SESSION") return json({ error: "Lobby session expired." }, 401);
+    if (message === "RATE_LIMITED") return json({ error: "Slow down." }, 429);
+    if (message === "INVALID_RATE_KEY") return json({ error: "Unauthorized request." }, 401);
     console.error(`[landmark-api] ${message}`);
     return json({ error: "The lobby could not be updated." }, 502);
   }

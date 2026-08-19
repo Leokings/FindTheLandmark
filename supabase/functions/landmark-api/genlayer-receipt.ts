@@ -16,7 +16,6 @@ const STATUS_BY_CODE: Record<string, string> = {
 };
 
 const TERMINAL = new Set([
-  "ACCEPTED",
   "UNDETERMINED",
   "FINALIZED",
   "CANCELED",
@@ -45,7 +44,7 @@ export function isTerminal(receipt: unknown) {
 export function hasGenuineConsensus(receipt: unknown) {
   if (!receipt || typeof receipt !== "object") return false;
   const transaction = receipt as Record<string, unknown>;
-  if (!new Set(["ACCEPTED", "FINALIZED"]).has(statusName(receipt))) return false;
+  if (statusName(receipt) !== "FINALIZED") return false;
 
   const decoded = transaction.txDataDecoded ?? transaction.tx_data_decoded;
   const decodedRecord = decoded && typeof decoded === "object" ? decoded as Record<string, unknown> : null;
@@ -71,7 +70,17 @@ export function hasGenuineConsensus(receipt: unknown) {
   const resultStatus = result && typeof result === "object"
     ? String((result as Record<string, unknown>).status ?? "").toUpperCase()
     : "";
-  if (execution !== "SUCCESS" || resultStatus !== "RETURN") return false;
+  const genvmResult = leaderRecord.genvmResult ?? leaderRecord.genvm_result;
+  const genvmRecord = genvmResult && typeof genvmResult === "object"
+    ? genvmResult as Record<string, unknown>
+    : null;
+  const genvmError = genvmRecord?.rawError
+    ?? genvmRecord?.raw_error
+    ?? genvmRecord?.errorCode
+    ?? genvmRecord?.error_code;
+  const returnedSuccessfully = resultStatus === "RETURN"
+    || (genvmRecord !== null && genvmError == null);
+  if (execution !== "SUCCESS" || !returnedSuccessfully) return false;
 
   const resultName = String(transaction.resultName ?? transaction.result_name ?? "").toUpperCase();
   if (resultName !== "AGREE" && resultName !== "MAJORITY_AGREE") return false;

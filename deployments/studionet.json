@@ -3,13 +3,16 @@
   "chainId": 61999,
   "rpcUrl": "https://studio.genlayer.com/api",
   "explorerUrl": "https://explorer-studio.genlayer.com",
-  "contractAddress": "0x61C8B24da6DfB8A4C3eCb035C199114f284677eD",
-  "deploymentTransaction": "0x8c3069b0524dc163cc8edca57a8f7600b6d315d01f3d359e115cfaa56912166b",
-  "sourceSha256": "5ad5bb7066b7e2f90e757fd16ffaed10189f2cadf63694e443ed9bd8d0a86c07",
-  "policyVersion": "find-the-landmark.lobby-game.v2",
+  "contractAddress": "0x198b1027F8eF524BEC3DA10a021b728FD071D7DB",
+  "deploymentTransaction": "0xdd09531d4632342ca2ca3faf852a9a4ee15a050606c807911aa4e93dd7d1ef12",
+  "sourceSha256": "ecb4135f69ee795d6b2f6bb3641f1838edf587e32bbf885794ede6e289c1b54c",
+  "policyVersion": "find-the-landmark.lobby-game.v3",
   "admin": "0x797d3b25fb2cca0ff93f60df1910267f3822d655",
   "relayer": "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec",
   "maxPlayers": 50,
   "maxRounds": 12,
-  "scoringScope": "per_game_only"
+  "scoringScope": "per_game_only",
+  "settlementMode": "per_round",
+  "xpAwardStatus": "FINALIZED",
+  "evidencePrecommitted": true
 }

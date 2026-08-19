@@ -2,17 +2,13 @@ import { privateKeyToAccount } from "viem/accounts";
 
 const EDGE_FUNCTION_URL =
   "https://auovgyyatbxdfynbbfth.supabase.co/functions/v1/landmark-api";
-const REQUEST_WINDOW_MS = 10 * 60 * 1000;
 const MAX_BODY_BYTES = 20_000;
-const MAX_RATE_LIMIT_KEYS = 5_000;
-const recentRequests = new Map<string, number[]>();
-let lastRateLimitSweep = 0;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 100;
 
-type GameAction = "create" | "join" | "state" | "start" | "answer";
+type GameAction = "create" | "join" | "results" | "state" | "start" | "answer";
 
 type GameBody = {
   action?: unknown;
@@ -36,29 +32,9 @@ async function sha256Hex(value: string) {
 }
 
 function clientIp(request: Request) {
-  return request.headers.get("cf-connecting-ip")
+  return request.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim()
     ?? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
     ?? "unknown";
-}
-
-function limited(key: string, maximum: number) {
-  const now = Date.now();
-  if (now - lastRateLimitSweep >= REQUEST_WINDOW_MS) {
-    for (const [storedKey, requests] of recentRequests) {
-      const activeRequests = requests.filter((time) => now - time < REQUEST_WINDOW_MS);
-      if (activeRequests.length) recentRequests.set(storedKey, activeRequests);
-      else recentRequests.delete(storedKey);
-    }
-    lastRateLimitSweep = now;
-  }
-  if (recentRequests.size >= MAX_RATE_LIMIT_KEYS && !recentRequests.has(key)) {
-    recentRequests.clear();
-  }
-  const active = (recentRequests.get(key) ?? []).filter((time) => now - time < REQUEST_WINDOW_MS);
-  if (active.length >= maximum) return true;
-  active.push(now);
-  recentRequests.set(key, active);
-  return false;
 }
 
 function signer() {
@@ -70,6 +46,7 @@ function signer() {
 function validAction(value: unknown): value is GameAction {
   return value === "create"
     || value === "join"
+    || value === "results"
     || value === "state"
     || value === "start"
     || value === "answer";
@@ -133,15 +110,13 @@ export async function POST(request: Request) {
 
   if (!validAction(input.action)) return json({ error: "Invalid action." }, 400);
   const playerId = typeof input.playerId === "string" ? input.playerId.trim() : "";
-  if (!/^[A-Za-z0-9_-]{12,100}$/.test(playerId)) return json({ error: "Invalid player." }, 400);
+  if (input.action !== "results" && !/^[A-Za-z0-9_-]{12,100}$/.test(playerId)) {
+    return json({ error: "Invalid player." }, 400);
+  }
 
-  const ip = clientIp(request);
-  const playerKey = `${input.action}:${playerId}`;
-  const limit = input.action === "state" ? 240 : input.action === "answer" ? 30 : 12;
-  const limitKey = input.action === "create" || input.action === "join" ? `${input.action}:${ip}` : playerKey;
-  if (limited(limitKey, limit)) return json({ error: "Slow down." }, 429);
-
-  const body: Record<string, unknown> = { action: input.action, playerId };
+  const requestIpHash = await sha256Hex(`landmark-ip:${clientIp(request)}`);
+  const body: Record<string, unknown> = { action: input.action, requestIpHash };
+  if (input.action !== "results") body.playerId = playerId;
   if (input.action === "create" || input.action === "join") {
     const displayName = typeof input.displayName === "string" ? input.displayName.trim() : "";
     if (displayName.length < 1 || displayName.length > 24) return json({ error: "Enter a player name." }, 400);

@@ -14,6 +14,8 @@ export type GameRound = {
   sourceLabel?: string;
   sourceUrl?: string;
   sourceExcerpt?: string;
+  evidenceUrl?: string;
+  evidenceSha256?: string;
 };
 
 const identifyBank: readonly GameRound[] = [
@@ -515,5 +517,7 @@ export function contractPlan(plan: readonly GameRound[]) {
     source_label: round.sourceLabel ?? "",
     source_url: round.sourceUrl ?? "",
     source_excerpt: round.sourceExcerpt ?? "",
+    evidence_url: round.evidenceUrl ?? "",
+    evidence_sha256: round.evidenceSha256 ?? "",
   }));
 }

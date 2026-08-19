@@ -25,6 +25,8 @@ PLAN = [
         "source_label": "",
         "source_url": "",
         "source_excerpt": "",
+        "evidence_url": EVIDENCE_URL,
+        "evidence_sha256": IMAGE_HASH,
     },
     {
         "kind": "quiz",
@@ -37,6 +39,8 @@ PLAN = [
         "source_label": "",
         "source_url": "",
         "source_excerpt": "",
+        "evidence_url": "",
+        "evidence_sha256": "",
     },
     {
         "kind": "quiz",
@@ -49,6 +53,8 @@ PLAN = [
         "source_label": "",
         "source_url": "",
         "source_excerpt": "",
+        "evidence_url": "",
+        "evidence_sha256": "",
     },
     {
         "kind": "quiz",
@@ -66,6 +72,8 @@ PLAN = [
         "source_label": "GenLayer Docs - Calling LLMs",
         "source_url": "https://docs.genlayer.com/developers/intelligent-contracts/features/calling-llms",
         "source_excerpt": "The guide documents gl.nondet.exec_prompt() as the function that executes an LLM prompt.",
+        "evidence_url": "",
+        "evidence_sha256": "",
     },
 ]
 
@@ -145,8 +153,6 @@ def settle_image(contract, answers=None):
                 {"player_hash": PLAYER_TWO, "choice_index": 0, "elapsed_ms": 10_000},
             ]
         ),
-        EVIDENCE_URL,
-        IMAGE_HASH,
     )
 
 
@@ -156,7 +162,8 @@ def test_policy_is_lobby_scoped(direct_vm, direct_deploy, direct_alice):
 
     assert policy["max_players"] == 50
     assert policy["scoring_scope"] == "per_game_only"
-    assert policy["batch_round_settlement"] is True
+    assert policy["settlement_mode"] == "per_round"
+    assert policy["evidence_precommitted"] is True
 
 
 def test_relayer_registers_game_and_plan_hashes(direct_vm, direct_deploy, direct_alice):
@@ -187,6 +194,26 @@ def test_roster_rejects_duplicates(direct_vm, direct_deploy, direct_alice):
 
     with direct_vm.expect_revert("Roster contains a duplicate player"):
         register(contract, roster=[PLAYER_ONE, PLAYER_ONE])
+
+
+def test_roster_requires_two_players(direct_vm, direct_deploy, direct_alice):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
+
+    with direct_vm.expect_revert("Roster must contain 2 to 50 players"):
+        register(contract, roster=[PLAYER_ONE])
+
+
+def test_image_evidence_must_be_precommitted(direct_vm, direct_deploy, direct_alice):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
+    invalid_plan = json.loads(json.dumps(PLAN))
+    invalid_plan[0]["evidence_sha256"] = ""
+
+    with direct_vm.expect_revert("must precommit an evidence URL and hash"):
+        contract.register_game(
+            "game-one",
+            json.dumps([PLAYER_ONE, PLAYER_TWO]),
+            json.dumps(invalid_plan),
+        )
 
 
 def test_image_round_scores_the_whole_lobby_once(direct_vm, direct_deploy, direct_alice):
@@ -245,8 +272,6 @@ def test_quiz_round_adds_only_per_game_xp(direct_vm, direct_deploy, direct_alice
                 {"player_hash": PLAYER_TWO, "choice_index": 2, "elapsed_ms": 1_000},
             ]
         ),
-        "",
-        "",
     )
 
     assert result["scores"][0]["awarded_xp"] == 87
@@ -268,8 +293,6 @@ def test_docs_quiz_is_grounded_in_frozen_official_source(direct_vm, direct_deplo
                 {"player_hash": PLAYER_TWO, "choice_index": 0, "elapsed_ms": 2_000},
             ]
         ),
-        "",
-        "",
     )
 
     assert result["correct_index"] == 1

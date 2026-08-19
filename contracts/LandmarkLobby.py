@@ -7,7 +7,7 @@ import re
 from urllib.parse import urlsplit
 
 
-POLICY_VERSION = "find-the-landmark.lobby-game.v2"
+POLICY_VERSION = "find-the-landmark.lobby-game.v3"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_PLAYERS = 50
 MAX_ROUNDS = 12
@@ -165,6 +165,8 @@ def _canonical_plan(raw_plan) -> list:
             "source_label",
             "source_url",
             "source_excerpt",
+            "evidence_url",
+            "evidence_sha256",
         }:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Game round has an invalid shape")
         kind = raw.get("kind")
@@ -190,6 +192,10 @@ def _canonical_plan(raw_plan) -> list:
         source_label = _optional_bounded_text(raw.get("source_label"), "Source label", 80)
         source_url = _optional_bounded_text(raw.get("source_url"), "Source URL", 1_000)
         source_excerpt = _optional_bounded_text(raw.get("source_excerpt"), "Source excerpt", 1_200)
+        evidence_url = _optional_bounded_text(raw.get("evidence_url"), "Evidence URL", 1_000)
+        evidence_sha256 = _optional_bounded_text(
+            raw.get("evidence_sha256"), "Evidence hash", 64
+        )
         source_values = (bool(source_label), bool(source_url), bool(source_excerpt))
         if any(source_values) and not all(source_values):
             raise gl.vm.UserError(
@@ -199,8 +205,22 @@ def _canonical_plan(raw_plan) -> list:
             source_url = _public_https_url(source_url, "Source URL")
             if (urlsplit(source_url).hostname or "").lower() != "docs.genlayer.com":
                 raise gl.vm.UserError(f"{ERROR_EXPECTED} Quiz source must use docs.genlayer.com")
-        if kind == "identify" and any(source_values):
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Image rounds cannot include a quiz source")
+        evidence_values = (bool(evidence_url), bool(evidence_sha256))
+        if kind == "identify":
+            if any(source_values):
+                raise gl.vm.UserError(
+                    f"{ERROR_EXPECTED} Image rounds cannot include a quiz source"
+                )
+            if not all(evidence_values):
+                raise gl.vm.UserError(
+                    f"{ERROR_EXPECTED} Image rounds must precommit an evidence URL and hash"
+                )
+            evidence_url = _public_https_url(evidence_url)
+            evidence_sha256 = _hex_digest(evidence_sha256, "Evidence hash")
+        elif any(evidence_values):
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} Quiz rounds cannot include image evidence"
+            )
         for value, label, minimum, maximum in (
             (duration_ms, "Duration", 10_000, 90_000),
             (reward_xp, "Reward XP", 1, 500),
@@ -222,6 +242,8 @@ def _canonical_plan(raw_plan) -> list:
                 "source_label": source_label,
                 "source_url": source_url,
                 "source_excerpt": source_excerpt,
+                "evidence_url": evidence_url,
+                "evidence_sha256": evidence_sha256,
             }
         )
     return plan
@@ -255,7 +277,8 @@ class LandmarkLobby(gl.Contract):
             "max_rounds": MAX_ROUNDS,
             "scoring_scope": "per_game_only",
             "validator_consensus": True,
-            "batch_round_settlement": True,
+            "settlement_mode": "per_round",
+            "evidence_precommitted": True,
         }
 
     @gl.public.write
@@ -271,8 +294,8 @@ class LandmarkLobby(gl.Contract):
             raw_roster = json.loads(roster_text)
         except Exception:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Roster must be valid JSON")
-        if not isinstance(raw_roster, list) or len(raw_roster) < 1 or len(raw_roster) > MAX_PLAYERS:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Roster must contain 1 to {MAX_PLAYERS} players")
+        if not isinstance(raw_roster, list) or len(raw_roster) < 2 or len(raw_roster) > MAX_PLAYERS:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Roster must contain 2 to {MAX_PLAYERS} players")
         roster = []
         for raw_player in raw_roster:
             player_hash = _hex_digest(raw_player, "Player hash")
@@ -368,8 +391,6 @@ class LandmarkLobby(gl.Contract):
         game_id: str,
         round_index: int,
         answers_json: str,
-        evidence_url: str,
-        evidence_sha256: str,
     ) -> dict:
         if gl.message.sender_address != self.relayer:
             raise gl.vm.UserError("Only the configured game relayer can settle rounds")
@@ -438,8 +459,8 @@ class LandmarkLobby(gl.Contract):
             )
 
         if challenge["kind"] == "identify":
-            normalized_url = _public_https_url(evidence_url)
-            normalized_hash = _hex_digest(evidence_sha256, "Evidence hash")
+            normalized_url = challenge["evidence_url"]
+            normalized_hash = challenge["evidence_sha256"]
             prompt = f"""You are judging one multiplayer Find the Landmark image round.
 
 QUESTION

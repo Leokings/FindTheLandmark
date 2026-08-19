@@ -1,9 +1,17 @@
 "use client";
 
 import Image from "next/image";
+import { createClient } from "@supabase/supabase-js";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 const SESSION_KEY = "find-the-landmark.lobby.v1";
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+const realtimeClient = SUPABASE_URL && SUPABASE_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+  : null;
 
 type GameStatus = "waiting" | "registering" | "running" | "verifying" | "finished" | "error";
 
@@ -42,6 +50,7 @@ type RoundState = {
 
 type GameState = {
   code: string;
+  realtimeGameId: string;
   status: GameStatus;
   isHost: boolean;
   maxPlayers: number;
@@ -58,6 +67,7 @@ type GameState = {
 };
 
 type GameResponse = GameState & { playerToken?: string; error?: string };
+type AnswerResponse = { accepted: true; roundId: string; selectedIndex: number; error?: string };
 
 class GameRequestError extends Error {
   status: number;
@@ -85,10 +95,10 @@ function storedSession(): Session | null {
   return null;
 }
 
-async function gameRequest(
+async function gameRequest<T extends { error?: string } = GameResponse>(
   payload: Record<string, unknown>,
   signal?: AbortSignal,
-): Promise<GameResponse> {
+): Promise<T> {
   const response = await fetch("/api/game", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -96,7 +106,7 @@ async function gameRequest(
     cache: "no-store",
     signal,
   });
-  const data = await response.json().catch(() => ({ error: "Bad game response." })) as GameResponse;
+  const data = await response.json().catch(() => ({ error: "Bad game response." })) as T;
   if (!response.ok) throw new GameRequestError(data.error || "Game unavailable.", response.status);
   return data;
 }
@@ -141,7 +151,7 @@ function GameHeader({ code, onExit }: { code: string; onExit: () => void }) {
 }
 
 export default function Home() {
-  const [mode, setMode] = useState<"create" | "join">("create");
+  const [mode, setMode] = useState<"create" | "join" | "results">("create");
   const [displayName, setDisplayName] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [session, setSession] = useState<Session | null>(storedSession);
@@ -151,6 +161,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(0);
+  const [viewedResultsCode, setViewedResultsCode] = useState("");
 
   const leaveGame = useCallback(() => {
     saveSession(null);
@@ -158,6 +169,7 @@ export default function Home() {
     setGame(null);
     setError("");
     setBusy(false);
+    setViewedResultsCode("");
   }, []);
 
   const refresh = useCallback(async (activeSession: Session, signal?: AbortSignal) => {
@@ -180,6 +192,17 @@ export default function Home() {
     }
   }, [leaveGame]);
 
+  const refreshResults = useCallback(async (code: string, signal?: AbortSignal) => {
+    try {
+      const next = await gameRequest({ action: "results", code }, signal);
+      setGame(next);
+      setError("");
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") return;
+      setError(caught instanceof Error ? caught.message : "Results unavailable.");
+    }
+  }, []);
+
   useEffect(() => {
     if (!session || game) return;
     const controller = new AbortController();
@@ -199,15 +222,44 @@ export default function Home() {
     const poll = async () => {
       controller = new AbortController();
       await refresh(session, controller.signal);
-      if (active) timer = window.setTimeout(poll, gameStatus === "waiting" ? 3_000 : 2_000);
+      const interval = game?.isHost ? (gameStatus === "waiting" ? 10_000 : 4_000) : 18_000;
+      if (active) timer = window.setTimeout(poll, interval + Math.floor(Math.random() * 1_500));
     };
-    timer = window.setTimeout(poll, 1_200);
+    timer = window.setTimeout(poll, game?.isHost ? 2_000 : 12_000 + Math.floor(Math.random() * 2_000));
     return () => {
       active = false;
       window.clearTimeout(timer);
       controller?.abort();
     };
-  }, [gameStatus, refresh, session]);
+  }, [game?.isHost, gameStatus, refresh, session]);
+
+  useEffect(() => {
+    if (!realtimeClient || !game?.realtimeGameId || game.status === "finished" || game.status === "error") return;
+    const channel = realtimeClient
+      .channel(`landmark-game-${game.realtimeGameId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "landmark_game_events",
+          filter: `game_id=eq.${game.realtimeGameId}`,
+        },
+        () => {
+          if (session) void refresh(session);
+          else if (viewedResultsCode) void refreshResults(viewedResultsCode);
+        },
+      )
+      .subscribe();
+    return () => { void realtimeClient.removeChannel(channel); };
+  }, [game?.realtimeGameId, game?.status, refresh, refreshResults, session, viewedResultsCode]);
+
+  useEffect(() => {
+    if (!session || !game?.isHost || game.status !== "running" || !game.currentRound?.endsAt) return;
+    const delay = Math.max(250, Date.parse(game.currentRound.endsAt) - Date.now() + 350);
+    const timer = window.setTimeout(() => void refresh(session), delay);
+    return () => window.clearTimeout(timer);
+  }, [game?.currentRound?.endsAt, game?.isHost, game?.status, refresh, session]);
 
   useEffect(() => {
     if (game?.status !== "running") return;
@@ -222,6 +274,25 @@ export default function Home() {
 
   const enterLobby = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (mode === "results") {
+      const code = joinCode.trim().toUpperCase();
+      if (!/^[A-Z2-9]{6}$/.test(code)) {
+        setError("Enter a game code.");
+        return;
+      }
+      setBusy(true);
+      setError("");
+      try {
+        const response = await gameRequest({ action: "results", code });
+        setViewedResultsCode(code);
+        setGame(response);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "Results unavailable.");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const name = displayName.replace(/\s+/g, " ").trim();
     if (!name) {
       setError("Enter a player name.");
@@ -273,8 +344,10 @@ export default function Home() {
     setAnswering(choiceIndex);
     setError("");
     try {
-      const next = await gameRequest({ action: "answer", ...session, choiceIndex });
-      setGame(next);
+      await gameRequest<AnswerResponse>({ action: "answer", ...session, choiceIndex });
+      setGame((current) => current?.currentRound
+        ? { ...current, currentRound: { ...current.currentRound, selectedIndex: choiceIndex } }
+        : current);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Answer not saved.");
     } finally {
@@ -314,20 +387,23 @@ export default function Home() {
           <div className="mode-switch" role="tablist" aria-label="Lobby action">
             <button type="button" className={mode === "create" ? "active" : ""} onClick={() => { setMode("create"); setError(""); }} role="tab" aria-selected={mode === "create"}>CREATE</button>
             <button type="button" className={mode === "join" ? "active" : ""} onClick={() => { setMode("join"); setError(""); }} role="tab" aria-selected={mode === "join"}>JOIN</button>
+            <button type="button" className={mode === "results" ? "active" : ""} onClick={() => { setMode("results"); setError(""); }} role="tab" aria-selected={mode === "results"}>RESULTS</button>
           </div>
           <form onSubmit={enterLobby}>
-            <label>
-              <span>PLAYER NAME</span>
-              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={24} placeholder="Atlas Ace" autoComplete="nickname" />
-            </label>
-            {mode === "join" && (
+            {mode !== "results" && (
               <label>
-                <span>ROOM CODE</span>
+                <span>PLAYER NAME</span>
+                <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={24} placeholder="Atlas Ace" autoComplete="nickname" />
+              </label>
+            )}
+            {mode !== "create" && (
+              <label>
+                <span>{mode === "results" ? "GAME CODE" : "ROOM CODE"}</span>
                 <input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 6))} maxLength={6} placeholder="MAP123" autoCapitalize="characters" autoComplete="off" />
               </label>
             )}
             {error && <p className="form-error" role="alert">{error}</p>}
-            <button className="primary-action" type="submit" disabled={busy}>{busy ? "WAIT…" : mode === "create" ? "MAKE LOBBY" : "ENTER ROOM"}<i>↗</i></button>
+            <button className="primary-action" type="submit" disabled={busy}>{busy ? "WAIT…" : mode === "create" ? "MAKE LOBBY" : mode === "join" ? "ENTER ROOM" : "VIEW RESULTS"}<i>↗</i></button>
           </form>
           <footer><span>PICTURE PICKS</span><span>ATLAS</span><span>GENLAYER DOCS</span></footer>
         </section>
@@ -346,7 +422,7 @@ export default function Home() {
             <p>{copied ? "COPIED" : "TAP TO COPY"}</p>
             <b>{game.playerCount}/{game.maxPlayers} IN</b>
             {game.isHost ? (
-              <button type="button" className="primary-action start-action" onClick={startGame} disabled={busy}>{busy ? "STARTING…" : "START GAME"}<i>→</i></button>
+              <button type="button" className="primary-action start-action" onClick={startGame} disabled={busy || game.playerCount < 2}>{busy ? "STARTING…" : game.playerCount < 2 ? "NEED 2 PLAYERS" : "START GAME"}<i>→</i></button>
             ) : <strong className="waiting-note">WAITING FOR HOST</strong>}
             {error && <p className="form-error" role="alert">{error}</p>}
           </section>

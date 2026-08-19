@@ -9,10 +9,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "npm run build && node --test tests/content.test.mjs tests/rendered-html.test.mjs",
+    "test": "npm run build && node --test tests/content.test.mjs tests/genlayer-receipt.test.mjs tests/rendered-html.test.mjs",
+    "test:load:50": "node tests/load/fifty-player.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .vercel"
   },
   "dependencies": {
+    "@supabase/supabase-js": "2.112.3",
     "next": "16.3.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
