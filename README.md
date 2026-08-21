@@ -25,6 +25,6 @@ gltest tests/integration/ -v -s --network studionet
 The Results tab opens the final leaderboard for any completed game code.
 
 - [Live app](https://find-the-landmark.vercel.app/)
-- [StudioNet contract](https://explorer-studio.genlayer.com/address/0x198b1027F8eF524BEC3DA10a021b728FD071D7DB)
+- [StudioNet contract](https://explorer-studio.genlayer.com/address/0x0c8e2c3a10003654F76C9736391fa245F120672d)
 - Deployment record: `deployments/studionet.json`
 - Production test: `docs/TEST-EVIDENCE.md`

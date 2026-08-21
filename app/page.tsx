@@ -2,9 +2,23 @@
 
 import Image from "next/image";
 import { createClient } from "@supabase/supabase-js";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  answerState,
+  commitSignedAnswer,
+  createGameSigner,
+  markPendingBackendSaved,
+  markPendingReveal,
+  pendingAnswers,
+  removePendingAnswer,
+  restoreGameSigner,
+  revealSignedAnswer,
+  savePendingAnswer,
+  type GameSigner,
+  type PendingAnswer,
+} from "@/lib/genlayer-session";
 
-const SESSION_KEY = "find-the-landmark.lobby.v1";
+const SESSION_KEY = "find-the-landmark.lobby.v2";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 const realtimeClient = SUPABASE_URL && SUPABASE_KEY
@@ -20,6 +34,7 @@ type Session = {
   displayName: string;
   playerId: string;
   playerToken: string;
+  signer: GameSigner;
 };
 
 type LeaderboardEntry = {
@@ -45,6 +60,8 @@ type RoundState = {
   sourceUrl: string | null;
   startedAt: string;
   endsAt: string;
+  revealFallbackAt: string;
+  revealDeadline: string;
   selectedIndex: number | null;
 };
 
@@ -63,7 +80,9 @@ type GameState = {
   leaderboard: LeaderboardEntry[];
   winner: LeaderboardEntry | null;
   error: string | null;
-  contractAddress: string;
+  contractAddress: string | null;
+  contractGameId: string | null;
+  contractVersion: "v3" | "v4";
 };
 
 type GameResponse = GameState & { playerToken?: string; error?: string };
@@ -88,7 +107,10 @@ function storedSession(): Session | null {
       && typeof value.displayName === "string"
       && typeof value.playerId === "string"
       && typeof value.playerToken === "string"
-    ) return value as Session;
+    ) {
+      const signer = restoreGameSigner(value.signer);
+      if (signer) return { ...value, signer } as Session;
+    }
   } catch {
     localStorage.removeItem(SESSION_KEY);
   }
@@ -116,8 +138,28 @@ function saveSession(session: Session | null) {
   else localStorage.removeItem(SESSION_KEY);
 }
 
+function sessionPayload(session: Session) {
+  return {
+    code: session.code,
+    playerId: session.playerId,
+    playerToken: session.playerToken,
+  };
+}
+
 function playerId() {
   return `player-${crypto.randomUUID()}`;
+}
+
+function pendingAnswerPayload(session: Session, answer: PendingAnswer) {
+  return {
+    action: "answer",
+    ...sessionPayload(session),
+    roundIndex: answer.roundIndex,
+    choiceIndex: answer.choiceIndex,
+    commitment: answer.commitment,
+    revealSalt: answer.salt,
+    commitTransactionHash: answer.commitTxHash,
+  };
 }
 
 function Board({ entries, full = false }: { entries: LeaderboardEntry[]; full?: boolean }) {
@@ -162,6 +204,7 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(0);
   const [viewedResultsCode, setViewedResultsCode] = useState("");
+  const recoveringAnswers = useRef(false);
 
   const leaveGame = useCallback(() => {
     saveSession(null);
@@ -176,9 +219,7 @@ export default function Home() {
     try {
       const next = await gameRequest({
         action: "state",
-        code: activeSession.code,
-        playerId: activeSession.playerId,
-        playerToken: activeSession.playerToken,
+        ...sessionPayload(activeSession),
       }, signal);
       setGame(next);
       setError("");
@@ -275,6 +316,70 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [game?.status]);
 
+  useEffect(() => {
+    if (!session || game?.contractVersion !== "v4" || !game.contractGameId) return;
+    let active = true;
+    const recover = async () => {
+      if (recoveringAnswers.current) return;
+      recoveringAnswers.current = true;
+      try {
+        const signer = restoreGameSigner(session.signer);
+        if (!signer) return;
+        const gameAnswers = pendingAnswers().filter((answer) => (
+          answer.contractGameId === game.contractGameId
+          && answer.contractAddress.toLowerCase() === game.contractAddress?.toLowerCase()
+        ));
+        for (const stored of gameAnswers) {
+          if (!active) return;
+          let answer = stored;
+          if (!answer.backendSaved) {
+            try {
+              await gameRequest<AnswerResponse>(pendingAnswerPayload(session, answer));
+              markPendingBackendSaved(answer);
+              answer = { ...answer, backendSaved: true };
+            } catch {
+              continue;
+            }
+          }
+          const currentTime = Date.now();
+          if (currentTime > answer.revealDeadlineMs) {
+            if (game.status === "finished" || game.status === "error") removePendingAnswer(answer);
+            continue;
+          }
+          if (currentTime < answer.revealFallbackAtMs) continue;
+          try {
+            const state = await answerState({
+              contractAddress: answer.contractAddress,
+              contractGameId: answer.contractGameId,
+              roundIndex: answer.roundIndex,
+              playerAddress: signer.address,
+            });
+            if (state.revealed) {
+              removePendingAnswer(answer);
+              continue;
+            }
+            const retryReveal = !answer.revealTxHash
+              || currentTime - (answer.revealSubmittedAtMs ?? 0) > 30_000;
+            if (retryReveal) {
+              const transactionHash = await revealSignedAnswer({ signer, answer });
+              markPendingReveal(answer, String(transactionHash));
+            }
+          } catch {
+            // The next recovery pass retries while the contract reveal window is open.
+          }
+        }
+      } finally {
+        recoveringAnswers.current = false;
+      }
+    };
+    void recover();
+    const timer = window.setInterval(() => void recover(), 5_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [game?.contractAddress, game?.contractGameId, game?.contractVersion, game?.status, session]);
+
   const secondsLeft = useMemo(() => {
     if (!game?.currentRound?.endsAt) return 0;
     return Math.max(0, Math.ceil((Date.parse(game.currentRound.endsAt) - now) / 1_000));
@@ -310,10 +415,12 @@ export default function Home() {
     setError("");
     try {
       const id = playerId();
+      const signer = createGameSigner();
       const response = await gameRequest({
         action: mode,
         playerId: id,
         displayName: name,
+        signerAddress: signer.address,
         ...(mode === "join" ? { code: joinCode } : {}),
       });
       if (!response.playerToken) throw new Error("Lobby token missing.");
@@ -322,6 +429,7 @@ export default function Home() {
         displayName: name,
         playerId: id,
         playerToken: response.playerToken,
+        signer,
       };
       saveSession(nextSession);
       setSession(nextSession);
@@ -338,7 +446,7 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      const next = await gameRequest({ action: "start", ...session });
+      const next = await gameRequest({ action: "start", ...sessionPayload(session) });
       setGame(next);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not start.");
@@ -352,12 +460,58 @@ export default function Home() {
     setAnswering(choiceIndex);
     setError("");
     try {
-      await gameRequest<AnswerResponse>({ action: "answer", ...session, choiceIndex });
+      if (
+        game.contractVersion !== "v4"
+        || !game.contractGameId
+        || !game.contractAddress
+        || !/^0x[a-fA-F0-9]{40}$/.test(game.contractAddress)
+      ) throw new Error("Round unavailable.");
+      const existing = pendingAnswers().find((entry) => (
+        entry.contractGameId === game.contractGameId
+        && entry.roundIndex === game.currentRound?.position
+      ));
+      let pending: PendingAnswer;
+      if (existing) {
+        if (existing.choiceIndex !== choiceIndex) throw new Error("Answer already locked.");
+        pending = existing;
+      } else {
+        const proof = await commitSignedAnswer({
+          signer: session.signer,
+          contractAddress: game.contractAddress as `0x${string}`,
+          contractGameId: game.contractGameId,
+          roundIndex: game.currentRound.position,
+          choiceIndex,
+        });
+        pending = {
+          contractAddress: game.contractAddress as `0x${string}`,
+          contractGameId: game.contractGameId,
+          roundIndex: game.currentRound.position,
+          choiceIndex,
+          salt: proof.salt,
+          commitment: proof.commitment,
+          commitTxHash: String(proof.commitTxHash),
+          revealFallbackAtMs: Date.parse(game.currentRound.revealFallbackAt),
+          revealDeadlineMs: Date.parse(game.currentRound.revealDeadline),
+        };
+        savePendingAnswer(pending);
+      }
+      await gameRequest<AnswerResponse>(pendingAnswerPayload(session, pending));
+      markPendingBackendSaved(pending);
       setGame((current) => current?.currentRound
         ? { ...current, currentRound: { ...current.currentRound, selectedIndex: choiceIndex } }
         : current);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Answer not saved.");
+      const locked = game.contractGameId
+        ? pendingAnswers().some((entry) => entry.contractGameId === game.contractGameId && entry.roundIndex === game.currentRound?.position)
+        : false;
+      if (locked) {
+        setGame((current) => current?.currentRound
+          ? { ...current, currentRound: { ...current.currentRound, selectedIndex: choiceIndex } }
+          : current);
+        setError("Answer locked. Syncing.");
+      } else {
+        setError(caught instanceof Error ? caught.message : "Answer not saved.");
+      }
     } finally {
       setAnswering(null);
     }
@@ -512,7 +666,7 @@ export default function Home() {
       <GameHeader code={game.code} onExit={leaveGame} />
       <div className="round-strip">
         <span>ROUND {String(game.currentRoundIndex + 1).padStart(2, "0")}/{String(game.roundCount).padStart(2, "0")}</span>
-        <b>{round?.sourceUrl ? "GENLAYER DOCS" : round?.kind === "quiz" ? "ATLAS QUIZ" : "QUICK PICK"}</b>
+        <b>{round?.sourceLabel?.startsWith("GenLayer") ? "GENLAYER DOCS" : round?.kind === "quiz" ? "ATLAS QUIZ" : "QUICK PICK"}</b>
         <strong>{you?.score ?? 0} XP</strong>
       </div>
       <div className="round-layout">

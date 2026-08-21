@@ -1,30 +1,40 @@
 # Production test evidence
 
-- Date: 2026-08-19
+- Date: 2026-08-21
 - App: https://find-the-landmark.vercel.app/
-- Commit: `ae1ac9d`
-- StudioNet contract: `0x198b1027F8eF524BEC3DA10a021b728FD071D7DB`
-- Game code: `HU98MN`
+- StudioNet contract: `0x0c8e2c3a10003654F76C9736391fa245F120672d`
+- Deployment transaction: `0x3f2b3f882169f43399c2a04cf8f6990645388c59b386da4b1957f20103d4b354` (`FINALIZED`, `MAJORITY_AGREE`)
+- Game code: `WN2JHJ`
 - Players: 50; player 51 rejected
 - Rounds: 12 settled, 0 pending
-- Settlement: one transaction per round; all 12 `FINALIZED`
+- Signed commitments: 96 across all 50 player signers
+- Settlement: all 12 transactions were non-leader-only, `FINALIZED`, `MAJORITY_AGREE`, and `SUCCESS` with 3/5 validator votes agreeing
 - Ended-game lookup: 50 leaderboard rows returned by code
-- Image evidence: 5/5 image rounds precommitted by public URL and SHA-256
-- Answer requests: 600/600 accepted; p95 3,173 ms
+- Sources per game: 5 hash-bound images, 3 official UNESCO DataHub records, and 4 commit-and-hash-pinned GenLayer Docs pages
 
-Registration transaction: `0x947f0889a4d93d8e9cf32418007f54c5c758d325ebed6024692cecfda1c91e83` (`FINALIZED`)
+Registration transaction: `0x34671f9caebf1cbf784ef50f51b08c5dce7f6d4fd7a0cd85812c3647576d44b9`
 
-| Round | Settlement transaction | Status |
+## Timestamp speed XP
+
+The contract records `committed_at_ms` from the signed GenLayer transaction timestamp and derives `elapsed_ms` from the onchain round start. In this run:
+
+- 96/96 XP awards matched the contract's base-plus-speed formula.
+- Recorded elapsed times ranged from 4,969 ms to 13,825 ms with 94 distinct values.
+- Sample: onchain commit `1,787,314,854,500`, round start `1,787,314,849,523`, elapsed `4,977` ms, award `137` XP.
+
+## Settlement transactions
+
+| Round | Transaction | Status |
 |---:|---|---|
-| 1 | `0xfc2ac51f4bf5f0c0fe9f7162e9a0a6a3d41a9540900594d55b8f674445f973f0` | `FINALIZED` |
-| 2 | `0x212ed343d4d1707195a31ef893a4bb68e6a3ba381c3bfb627ab0b78751892276` | `FINALIZED` |
-| 3 | `0x9e9524d451b7403bd68cba352f6fcc28d02c07bf7f1ddcc60cbf3e6662e7508e` | `FINALIZED` |
-| 4 | `0x359fb50c555217c398e404130ca8083a35f0d1ad6db4ca942637b28f04118520` | `FINALIZED` |
-| 5 | `0xeb31061f48606ba9e49b5bea082ed06123951e8eaedb9b3840b0b304c74264f2` | `FINALIZED` |
-| 6 | `0x4a5acb0e6381fbc9ddcdb44e404b0c2ab96a25138aa889fa9b66b6b27d816b9a` | `FINALIZED` |
-| 7 | `0x38f6174f0e2697a408dbb48bd259ef0abc008553cde23cbde90ff67b25bb7b59` | `FINALIZED` |
-| 8 | `0xbfc94eaa226c515d5aac415aad40438e311da823aa1a1f66ec2602f963d5e124` | `FINALIZED` |
-| 9 | `0x5864c5dbcb6da460f56cfa273e7493052fbffb24bdc76a9bf1f6317da762bfe6` | `FINALIZED` |
-| 10 | `0x9c22c447664390ef0f3a68811b30f31b4ef15b43668cc742c77ca935fd6acec4` | `FINALIZED` |
-| 11 | `0x6af60111efda45fb0fa4095ffd20d8c0417345ca17b32134fa75e3871b830808` | `FINALIZED` |
-| 12 | `0xa732e8138312a44c26e635a2b4d84abcbe782a140ac3226ec36e130831d7387a` | `FINALIZED` |
+| 1 | `0x36122eb0e05bcf8cd9917d31c8c756433ef175b9ce81546467c52d1ef323b64b` | `FINALIZED` |
+| 2 | `0xa83a2a236543e33fec77a426360888c0589ed904631e61082583719d8a250c89` | `FINALIZED` |
+| 3 | `0xf0e6b686fa96ed623c1fee7bf8e800e527d862ee206cca21b9ba9937fcbea27f` | `FINALIZED` |
+| 4 | `0x44d6165000f3d8e39aaf49f9701d02cf48ca5b18a417262cfd44de061cf81955` | `FINALIZED` |
+| 5 | `0x211c89686e3aa1af242f8cf8bc7aee26f15811769e241a085cf63f3b37a82def` | `FINALIZED` |
+| 6 | `0xf8133bb47bfd4faf201ff515c122137ab92f7945ec802f8c453ffa371fbd1642` | `FINALIZED` |
+| 7 | `0x6b69b0d4e4a2cabcd400115130e3c828c836b324821a89ffcbe0ffa2421eedef` | `FINALIZED` |
+| 8 | `0x9f72c69756b403383868881ed9e0239d67107a6ee6c4a1088bb31b0f7e0230dd` | `FINALIZED` |
+| 9 | `0x66af665a3723c30a3f9dd27d1f935cb153c5d760ae4c835d317a7d4dfcc84aad` | `FINALIZED` |
+| 10 | `0x8734254eb51b034c64bb482cfbc5da488875a2bbcd930e5b20f2a8b6be65f690` | `FINALIZED` |
+| 11 | `0xd252e87fc7c78c0a9be9b2c2894bf1677d8960199f6680449b697b64f8f321f7` | `FINALIZED` |
+| 12 | `0x9f2f013936c0ecbd65878da9c10d3638bf06bdf969cff48f18e56b276e2763da` | `FINALIZED` |

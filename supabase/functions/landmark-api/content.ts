@@ -13,10 +13,28 @@ export type GameRound = {
   creditUrl?: string;
   sourceLabel?: string;
   sourceUrl?: string;
-  sourceExcerpt?: string;
+  sourceSha256?: string;
   evidenceUrl?: string;
   evidenceSha256?: string;
 };
+
+const GENLAYER_DOCS_COMMIT = "9699f3900dd697689090f6595f5c14b4f0a60fdf";
+
+function genLayerSource(label: string, path: string, sourceSha256: string) {
+  return {
+    sourceLabel: `GenLayer Docs · ${label}`,
+    sourceUrl: `https://raw.githubusercontent.com/genlayerlabs/genlayer-docs/${GENLAYER_DOCS_COMMIT}/pages/${path}`,
+    sourceSha256,
+  };
+}
+
+function unescoSource(label: string, listId: number) {
+  return {
+    sourceLabel: `UNESCO World Heritage DataHub · ${label}`,
+    sourceUrl: `https://data.unesco.org/api/explore/v2.1/catalog/datasets/whc001/records?where=id_no%3D${listId}&limit=1`,
+    sourceSha256: "",
+  };
+}
 
 const identifyBank: readonly GameRound[] = [
   {
@@ -263,79 +281,94 @@ const identifyBank: readonly GameRound[] = [
 
 const quizBank: readonly GameRound[] = [
   {
-    kind: "quiz", challengeId: "quiz-oldest-001", question: "Which landmark was completed first?",
+    kind: "quiz", challengeId: "quiz-paris-seine-001", question: "Which landmark belongs to the UNESCO property Paris, Banks of the Seine?",
     options: ["Burj Khalifa", "Sydney Opera House", "Eiffel Tower", "Empire State Building"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Timeline check", city: "Atlas quiz",
+    ...unescoSource("Paris, Banks of the Seine", 600),
   },
   {
     kind: "quiz", challengeId: "quiz-mausoleum-001", question: "Which landmark was commissioned as a mausoleum?",
     options: ["Colosseum", "Sagrada Família", "Taj Mahal", "Statue of Liberty"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Purpose check", city: "Atlas quiz",
+    ...unescoSource("Taj Mahal", 252),
   },
   {
     kind: "quiz", challengeId: "quiz-jordan-001", question: "Which landmark is in Jordan?",
     options: ["Petra", "Machu Picchu", "Angkor Wat", "Moai of Rapa Nui"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Map check", city: "Atlas quiz",
+    ...unescoSource("Petra", 326),
   },
   {
-    kind: "quiz", challengeId: "quiz-strait-001", question: "Which landmark spans the strait between San Francisco Bay and the Pacific Ocean?",
-    options: ["Brooklyn Bridge", "Tower Bridge", "Golden Gate Bridge", "Akashi Kaikyō Bridge"],
-    durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Geography check", city: "Atlas quiz",
+    kind: "quiz", challengeId: "quiz-sydney-unesco-001", question: "Which landmark is Australia's UNESCO-listed performing-arts icon?",
+    options: ["Brooklyn Bridge", "Tower Bridge", "Sydney Opera House", "Akashi Kaikyō Bridge"],
+    durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Culture check", city: "Atlas quiz",
+    ...unescoSource("Sydney Opera House", 166),
   },
   {
     kind: "quiz", challengeId: "quiz-gaudi-001", question: "Which landmark is most closely associated with Antoni Gaudí?",
     options: ["Sagrada Família", "Sacré-Cœur", "Milan Cathedral", "St. Paul's Cathedral"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Architect check", city: "Atlas quiz",
+    ...unescoSource("Works of Antoni Gaudí", 320),
   },
   {
     kind: "quiz", challengeId: "quiz-rio-001", question: "Which landmark is located in Rio de Janeiro?",
     options: ["Christ the Redeemer", "Cristo Rei", "Atomium", "Monumental Axis"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "City check", city: "Atlas quiz",
+    ...unescoSource("Rio de Janeiro: Carioca Landscapes", 1100),
   },
   {
     kind: "quiz", challengeId: "quiz-liberty-island-001", question: "Which landmark stands on Liberty Island?",
     options: ["Statue of Liberty", "Freedom Monument", "Motherland Monument", "Angel of Independence"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Island check", city: "Atlas quiz",
+    ...unescoSource("Statue of Liberty", 307),
   },
   {
     kind: "quiz", challengeId: "quiz-cambodia-001", question: "Which landmark is in Cambodia?",
     options: ["Bagan", "Borobudur", "Angkor Wat", "Prambanan"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Country check", city: "Atlas quiz",
+    ...unescoSource("Angkor", 668),
   },
   {
-    kind: "quiz", challengeId: "quiz-tallest-001", question: "Which of these structures is the tallest?",
-    options: ["Eiffel Tower", "CN Tower", "Burj Khalifa", "Tokyo Tower"],
-    durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Height check", city: "Atlas quiz",
+    kind: "quiz", challengeId: "quiz-fujisan-001", question: "Which landmark is the cultural property UNESCO calls Fujisan?",
+    options: ["Mount Fuji", "Mount Etna", "Mount Rainier", "Mount Ararat"],
+    durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Mountain check", city: "Atlas quiz",
+    ...unescoSource("Fujisan", 1418),
   },
   {
     kind: "quiz", challengeId: "quiz-barcelona-001", question: "Which landmark is in Barcelona?",
     options: ["Sagrada Família", "Hagia Sophia", "Saint Basil's Cathedral", "Cologne Cathedral"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "City check", city: "Atlas quiz",
+    ...unescoSource("Works of Antoni Gaudí", 320),
   },
   {
-    kind: "quiz", challengeId: "quiz-thames-001", question: "Which landmark crosses the River Thames in London?",
-    options: ["Tower Bridge", "Brooklyn Bridge", "Forth Bridge", "Golden Gate Bridge"],
-    durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "River check", city: "Atlas quiz",
+    kind: "quiz", challengeId: "quiz-stonehenge-001", question: "Which landmark is part of UNESCO's Stonehenge, Avebury and Associated Sites?",
+    options: ["Stonehenge", "Brooklyn Bridge", "Forth Bridge", "Golden Gate Bridge"],
+    durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Heritage check", city: "Atlas quiz",
+    ...unescoSource("Stonehenge, Avebury and Associated Sites", 373),
   },
   {
     kind: "quiz", challengeId: "quiz-rapa-nui-001", question: "Which landmark is found on Rapa Nui?",
     options: ["Moai", "Stonehenge", "Terracotta Army", "Olmec heads"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Island check", city: "Atlas quiz",
+    ...unescoSource("Rapa Nui National Park", 715),
   },
   {
     kind: "quiz", challengeId: "quiz-agra-001", question: "Which landmark is in Agra?",
     options: ["Taj Mahal", "Gateway of India", "India Gate", "Hawa Mahal"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "City check", city: "Atlas quiz",
+    ...unescoSource("Taj Mahal", 252),
   },
   {
     kind: "quiz", challengeId: "quiz-inca-001", question: "Which landmark is an ancient Inca citadel?",
     options: ["Machu Picchu", "Chichén Itzá", "Petra", "Angkor Wat"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Civilization check", city: "Atlas quiz",
+    ...unescoSource("Historic Sanctuary of Machu Picchu", 274),
   },
   {
     kind: "quiz", challengeId: "quiz-honshu-001", question: "Which landmark is on Honshu, Japan?",
     options: ["Mount Fuji", "Mount Etna", "Mount Rainier", "Mount Ararat"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Island check", city: "Atlas quiz",
+    ...unescoSource("Fujisan", 1418),
   },
 ];
 
@@ -344,121 +377,91 @@ const genLayerQuizBank: readonly GameRound[] = [
     kind: "quiz", challengeId: "genlayer-exec-prompt-001", question: "Which GenLayer function sends a prompt to an LLM?",
     options: ["gl.nondet.web.get()", "gl.nondet.exec_prompt()", "gl.vm.run_nondet_unsafe()", "gl.public.write"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Calling LLMs", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Calling LLMs",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/calling-llms",
-    sourceExcerpt: "The Calling LLMs guide documents gl.nondet.exec_prompt() as the function that executes an LLM prompt. It can request structured JSON by setting response_format to json.",
+    ...genLayerSource("Calling LLMs", "developers/intelligent-contracts/features/calling-llms.mdx", "1f42760bee718355a87ac111259fca665b14e834a4d8e0ab1739918569c87722"),
   },
   {
     kind: "quiz", challengeId: "genlayer-image-limit-001", question: "What is the documented maximum number of images in one exec_prompt call?",
     options: ["One", "Two", "Four", "Eight"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Calling LLMs", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Calling LLMs",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/calling-llms",
-    sourceExcerpt: "The Calling LLMs guide says the images parameter supports image processing and documents a maximum of two images per prompt.",
+    ...genLayerSource("Calling LLMs", "developers/intelligent-contracts/features/calling-llms.mdx", "1f42760bee718355a87ac111259fca665b14e834a4d8e0ab1739918569c87722"),
   },
   {
     kind: "quiz", challengeId: "genlayer-nondet-block-001", question: "Where must gl.nondet operations execute?",
     options: ["Inside a nondeterministic block", "Only in the constructor", "Only in view functions", "Outside the contract"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Non-determinism", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Non-determinism",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/non-determinism",
-    sourceExcerpt: "The Non-determinism guide says nondeterministic operations, including LLM prompts and web requests, must run inside a nondeterministic block.",
+    ...genLayerSource("Non-determinism", "developers/intelligent-contracts/features/non-determinism.mdx", "7b74be7ae6c01befc81bc8482c0a1548d42f6ca82f346d6aca77be78f0902608"),
   },
   {
     kind: "quiz", challengeId: "genlayer-storage-write-001", question: "Which operation must remain outside a nondeterministic block?",
     options: ["LLM prompts", "Web requests", "Storage writes", "Validator comparisons"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Non-determinism", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Non-determinism",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/non-determinism",
-    sourceExcerpt: "The Non-determinism guide requires contract storage writes to happen in deterministic context outside nondeterministic blocks, after consensus is reached.",
+    ...genLayerSource("Non-determinism", "developers/intelligent-contracts/features/non-determinism.mdx", "7b74be7ae6c01befc81bc8482c0a1548d42f6ca82f346d6aca77be78f0902608"),
   },
   {
     kind: "quiz", challengeId: "genlayer-language-001", question: "Which language is used to write GenLayer Intelligent Contracts?",
     options: ["Python", "Solidity", "Rust", "Go"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Introduction", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Introduction",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/introduction",
-    sourceExcerpt: "GenLayer Intelligent Contracts are written in Python and use the GenVM SDK to access contract storage, messages, and nondeterministic operations.",
+    ...genLayerSource("Introduction", "developers/intelligent-contracts/introduction.mdx", "95f3ecb0c05465f3d525d7ea7406d228ad462960b83a3ecb168b19c57c64a30f"),
   },
   {
     kind: "quiz", challengeId: "genlayer-view-decorator-001", question: "Which decorator marks a read-only Intelligent Contract method?",
     options: ["@gl.public.view", "@gl.public.write", "@gl.public.write.payable", "@gl.contract_interface"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Public methods", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Features overview",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features",
-    sourceExcerpt: "The features overview identifies @gl.public.view as the decorator for read-only public methods that do not modify contract state.",
+    ...genLayerSource("Features overview", "developers/intelligent-contracts/features.mdx", "cb20bd015db1957afd6f93fa719cc07013b6778734621cd40bc825f2af31417f"),
   },
   {
     kind: "quiz", challengeId: "genlayer-payable-decorator-001", question: "Which decorator marks a public method that can modify state and receive value?",
     options: ["@gl.public.write.payable", "@gl.public.view", "@gl.public.write", "@gl.nondet"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Public methods", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Features overview",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features",
-    sourceExcerpt: "The features overview identifies @gl.public.write.payable as the decorator for public methods that can change state and receive value.",
+    ...genLayerSource("Features overview", "developers/intelligent-contracts/features.mdx", "cb20bd015db1957afd6f93fa719cc07013b6778734621cd40bc825f2af31417f"),
   },
   {
     kind: "quiz", challengeId: "genlayer-equivalence-purpose-001", question: "What is the Equivalence Principle used for?",
     options: ["Reaching consensus on nondeterministic results", "Calculating gas fees", "Encrypting contract storage", "Creating wallet addresses"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Equivalence Principle", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Equivalence Principle",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/equivalence-principle",
-    sourceExcerpt: "The Equivalence Principle lets validators reach consensus on nondeterministic outputs by checking whether independently produced results satisfy the contract's comparison rule.",
+    ...genLayerSource("Equivalence Principle", "developers/intelligent-contracts/equivalence-principle.mdx", "ecf116d9a4d0f72b56000a0111ed167106f1b2b6916673bbdd86bbfa23dbd59b"),
   },
   {
     kind: "quiz", challengeId: "genlayer-validator-role-001", question: "What must validators do with a leader's proposed nondeterministic result?",
     options: ["Independently verify it", "Accept it automatically", "Store it offchain only", "Replace it with the first answer"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Consensus", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Equivalence Principle",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/equivalence-principle",
-    sourceExcerpt: "A leader proposes a result, while the other validators independently execute or evaluate the task and decide whether the proposal is equivalent.",
+    ...genLayerSource("Equivalence Principle", "developers/intelligent-contracts/equivalence-principle.mdx", "ecf116d9a4d0f72b56000a0111ed167106f1b2b6916673bbdd86bbfa23dbd59b"),
   },
   {
     kind: "quiz", challengeId: "genlayer-strict-eq-001", question: "When is strict_eq the best comparison mode?",
     options: ["When results should match exactly", "When any plausible answer is enough", "When storage is encrypted", "When no validators are available"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Equivalence Principle", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Equivalence Principle",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/equivalence-principle",
-    sourceExcerpt: "The guide recommends strict equality for outputs that can be deterministic or canonicalized so validators can compare the values exactly.",
+    ...genLayerSource("Equivalence Principle", "developers/intelligent-contracts/equivalence-principle.mdx", "ecf116d9a4d0f72b56000a0111ed167106f1b2b6916673bbdd86bbfa23dbd59b"),
   },
   {
     kind: "quiz", challengeId: "genlayer-view-call-001", question: "How does view() interact with another Intelligent Contract?",
     options: ["It reads synchronously and returns a value", "It queues an asynchronous write", "It deploys a new contract", "It starts an appeal"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Contract calls", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Interacting with Intelligent Contracts",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/interacting-with-intelligent-contracts",
-    sourceExcerpt: "The contract interaction guide describes view() as a synchronous read-only call that immediately returns data from another Intelligent Contract.",
+    ...genLayerSource("Interacting with Intelligent Contracts", "developers/intelligent-contracts/features/interacting-with-intelligent-contracts.mdx", "f5e2b93d543e384b448ef0ce02aad09d838be21626f0bac0474719c3ab1563b3"),
   },
   {
     kind: "quiz", challengeId: "genlayer-emit-call-001", question: "How does emit() interact with another Intelligent Contract?",
     options: ["It queues an asynchronous write message", "It performs a synchronous read", "It downloads a web page", "It creates a validator"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Contract calls", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Interacting with Intelligent Contracts",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/interacting-with-intelligent-contracts",
-    sourceExcerpt: "The contract interaction guide describes emit() as an asynchronous internal message used to invoke a write method on another Intelligent Contract.",
+    ...genLayerSource("Interacting with Intelligent Contracts", "developers/intelligent-contracts/features/interacting-with-intelligent-contracts.mdx", "f5e2b93d543e384b448ef0ce02aad09d838be21626f0bac0474719c3ab1563b3"),
   },
   {
     kind: "quiz", challengeId: "genlayer-finalized-message-001", question: "What is the safe default timing for an internal message?",
     options: ["on='finalized'", "on='accepted'", "on='pending'", "on='leader'"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Internal messages", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Messages",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/messages",
-    sourceExcerpt: "The messages guide describes on='finalized' as the safe default because the source transaction can no longer be changed by an appeal.",
+    ...genLayerSource("Messages", "developers/intelligent-contracts/features/messages.mdx", "9280288a2f14ce6e05152087f803aab5697c6df075664a62008cbcd30785c570"),
   },
   {
     kind: "quiz", challengeId: "genlayer-origin-address-001", question: "What does gl.message.origin_address represent?",
     options: ["The original transaction submitter", "The current validator", "The contract's own address", "The latest internal-message sender"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Transaction context", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Transaction Context",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/transaction-context",
-    sourceExcerpt: "Transaction context preserves origin_address as the account that submitted the original transaction, including across chains of internal messages.",
+    ...genLayerSource("Transaction Context", "developers/intelligent-contracts/features/transaction-context.mdx", "c6d603432d54261cd8128e530005809d4a68da0e1d3a55265f4df88b916f2268"),
   },
   {
     kind: "quiz", challengeId: "genlayer-transaction-time-001", question: "Which time do validators observe while executing the same transaction?",
     options: ["A timestamp pinned to the transaction", "Each validator's wall-clock time", "The contract deployment time", "The user's browser time"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Transaction context", city: "GenLayer docs",
-    sourceLabel: "GenLayer Docs · Transaction Context",
-    sourceUrl: "https://docs.genlayer.com/developers/intelligent-contracts/features/transaction-context",
-    sourceExcerpt: "The transaction context provides deterministic time pinned to the transaction timestamp so validators observe the same value during execution.",
+    ...genLayerSource("Transaction Context", "developers/intelligent-contracts/features/transaction-context.mdx", "c6d603432d54261cd8128e530005809d4a68da0e1d3a55265f4df88b916f2268"),
   },
 ];
 
@@ -516,7 +519,7 @@ export function contractPlan(plan: readonly GameRound[]) {
     speed_bonus: round.speedBonus,
     source_label: round.sourceLabel ?? "",
     source_url: round.sourceUrl ?? "",
-    source_excerpt: round.sourceExcerpt ?? "",
+    source_sha256: round.sourceSha256 ?? "",
     evidence_url: round.evidenceUrl ?? "",
     evidence_sha256: round.evidenceSha256 ?? "",
   }));

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  executionFailureReason,
   hasGenuineConsensus,
+  hasSuccessfulFinalizedExecution,
   isTerminal,
   statusName,
 } from "../supabase/functions/landmark-api/genlayer-receipt.ts";
@@ -57,11 +59,23 @@ test("never awards on ACCEPTED or failed execution", () => {
 test("requires independent validators and majority agreement", () => {
   const leaderOnly = finalizedReceipt();
   leaderOnly.tx_data_decoded.leader_only = true;
+  assert.equal(hasSuccessfulFinalizedExecution(leaderOnly), true);
   assert.equal(hasGenuineConsensus(leaderOnly), false);
 
   const noMajority = finalizedReceipt();
   noMajority.last_round.validator_votes_name = ["AGREE", "DISAGREE", "DISAGREE"];
   assert.equal(hasGenuineConsensus(noMajority), false);
+});
+
+test("extracts a finalized rollback reason", () => {
+  const failed = finalizedReceipt();
+  failed.consensus_data.leader_receipt[0] = {
+    mode: "leader",
+    execution_result: "ERROR",
+    result: { status: "rollback", payload: "[EXTERNAL] Source server returned HTTP 403" },
+  };
+  assert.equal(hasSuccessfulFinalizedExecution(failed), false);
+  assert.equal(executionFailureReason(failed), "[EXTERNAL] Source server returned HTTP 403");
 });
 
 test("normalizes numeric status codes", () => {

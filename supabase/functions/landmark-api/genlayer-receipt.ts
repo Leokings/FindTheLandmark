@@ -41,30 +41,29 @@ export function isTerminal(receipt: unknown) {
   return TERMINAL.has(statusName(receipt));
 }
 
-export function hasGenuineConsensus(receipt: unknown) {
-  if (!receipt || typeof receipt !== "object") return false;
-  const transaction = receipt as Record<string, unknown>;
-  if (statusName(receipt) !== "FINALIZED") return false;
+function transactionRecord(receipt: unknown) {
+  return receipt && typeof receipt === "object" ? receipt as Record<string, unknown> : null;
+}
 
-  const decoded = transaction.txDataDecoded ?? transaction.tx_data_decoded;
-  const decodedRecord = decoded && typeof decoded === "object" ? decoded as Record<string, unknown> : null;
-  const leaderOnly = decodedRecord?.leaderOnly
-    ?? decodedRecord?.leader_only
-    ?? transaction.leaderOnly
-    ?? transaction.leader_only;
-  if (leaderOnly !== false) return false;
-
+function leaderReceipt(receipt: unknown) {
+  const transaction = transactionRecord(receipt);
+  if (!transaction) return null;
   const consensus = transaction.consensusData ?? transaction.consensus_data;
-  if (!consensus || typeof consensus !== "object") return false;
+  if (!consensus || typeof consensus !== "object") return null;
   const leaderReceipts = (consensus as Record<string, unknown>).leaderReceipt
     ?? (consensus as Record<string, unknown>).leader_receipt;
-  if (!Array.isArray(leaderReceipts)) return false;
+  if (!Array.isArray(leaderReceipts)) return null;
   const leader = leaderReceipts.find((candidate) => {
     if (!candidate || typeof candidate !== "object") return false;
     return String((candidate as Record<string, unknown>).mode ?? "").toLowerCase() === "leader";
   });
-  if (!leader || typeof leader !== "object") return false;
-  const leaderRecord = leader as Record<string, unknown>;
+  return leader && typeof leader === "object" ? leader as Record<string, unknown> : null;
+}
+
+export function hasSuccessfulFinalizedExecution(receipt: unknown) {
+  if (statusName(receipt) !== "FINALIZED") return false;
+  const leaderRecord = leaderReceipt(receipt);
+  if (!leaderRecord) return false;
   const execution = String(leaderRecord.executionResult ?? leaderRecord.execution_result ?? "").toUpperCase();
   const result = leaderRecord.result;
   const resultStatus = result && typeof result === "object"
@@ -80,7 +79,29 @@ export function hasGenuineConsensus(receipt: unknown) {
     ?? genvmRecord?.error_code;
   const returnedSuccessfully = resultStatus === "RETURN"
     || (genvmRecord !== null && genvmError == null);
-  if (execution !== "SUCCESS" || !returnedSuccessfully) return false;
+  return execution === "SUCCESS" && returnedSuccessfully;
+}
+
+export function executionFailureReason(receipt: unknown) {
+  const leader = leaderReceipt(receipt);
+  const result = leader?.result;
+  if (!result || typeof result !== "object") return null;
+  const payload = (result as Record<string, unknown>).payload;
+  return typeof payload === "string" && payload.trim() ? payload.trim().slice(0, 500) : null;
+}
+
+export function hasGenuineConsensus(receipt: unknown) {
+  if (!receipt || typeof receipt !== "object") return false;
+  const transaction = receipt as Record<string, unknown>;
+  if (!hasSuccessfulFinalizedExecution(receipt)) return false;
+
+  const decoded = transaction.txDataDecoded ?? transaction.tx_data_decoded;
+  const decodedRecord = decoded && typeof decoded === "object" ? decoded as Record<string, unknown> : null;
+  const leaderOnly = decodedRecord?.leaderOnly
+    ?? decodedRecord?.leader_only
+    ?? transaction.leaderOnly
+    ?? transaction.leader_only;
+  if (leaderOnly !== false) return false;
 
   const resultName = String(transaction.resultName ?? transaction.result_name ?? "").toUpperCase();
   if (resultName !== "AGREE" && resultName !== "MAJORITY_AGREE") return false;

@@ -8,14 +8,20 @@ import {
 } from "npm:@imagemagick/magick-wasm@0.0.42";
 import { verifyMessage } from "npm:viem@2.55.18";
 import { contractPlan, createGamePlan, type GameRound } from "./content.ts";
-import { hasGenuineConsensus, isTerminal, statusName } from "./genlayer-receipt.ts";
+import {
+  executionFailureReason,
+  hasGenuineConsensus,
+  hasSuccessfulFinalizedExecution,
+  isTerminal,
+  statusName,
+} from "./genlayer-receipt.ts";
 
 const magickWasm = await Deno.readFile(
   new URL("magick.wasm", import.meta.resolve("npm:@imagemagick/magick-wasm@0.0.42")),
 );
 await initializeImageMagick(magickWasm);
 
-const CONTRACT_ADDRESS = "0x198b1027F8eF524BEC3DA10a021b728FD071D7DB";
+const V4_CONTRACT_ADDRESS = "0x0c8e2c3a10003654F76C9736391fa245F120672d";
 const EXPECTED_RELAYER = "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec";
 const SITE_SIGNERS = [
   "0xdc2606D6c7833178fFF3D456ADEF8d97029ea196",
@@ -48,6 +54,8 @@ type GameRow = {
   round_count: number;
   current_round: number;
   plan: GameRound[];
+  contract_version: "v3" | "v4";
+  contract_address: string | null;
   contract_game_id: string | null;
   registration_tx_hash: string | null;
   winner_player_id: string | null;
@@ -62,6 +70,7 @@ type PlayerRow = {
   game_id: string;
   player_key: string;
   player_hash: string;
+  signer_address: string | null;
   player_token_hash: string;
   display_name: string;
   is_host: boolean;
@@ -74,9 +83,13 @@ type RoundRow = {
   position: number;
   kind: "identify" | "quiz";
   challenge_id: string;
-  status: "queued" | "open" | "submitting" | "pending" | "settled" | "failed";
+  status: "queued" | "open" | "revealing" | "revealed" | "finalizing" | "submitting" | "pending" | "settled" | "failed";
   started_at: string | null;
   ends_at: string | null;
+  reveal_deadline: string | null;
+  finalize_after: string | null;
+  reveal_transaction_hash: string | null;
+  finalize_transaction_hash: string | null;
   transaction_hash: string | null;
   correct_index: number | null;
   consensus_status: string | null;
@@ -193,6 +206,23 @@ function normalizeCode(value: unknown) {
 function normalizeToken(value: unknown) {
   const token = typeof value === "string" ? value.trim() : "";
   return /^[a-f0-9]{64}$/.test(token) ? token : null;
+}
+
+function normalizeSignerAddress(value: unknown) {
+  const address = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return /^0x[a-f0-9]{40}$/.test(address) && address !== "0x0000000000000000000000000000000000000000"
+    ? address
+    : null;
+}
+
+function normalizeDigest(value: unknown) {
+  const digest = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return /^[a-f0-9]{64}$/.test(digest) ? digest : null;
+}
+
+function normalizeTransactionHash(value: unknown) {
+  const hash = typeof value === "string" ? value.trim() : "";
+  return /^(0x)?[a-fA-F0-9]{64}$/.test(hash) ? hash : null;
 }
 
 function createToken() {
@@ -316,149 +346,322 @@ async function genlayerClients() {
   return { readClient, writeClient };
 }
 
-async function openRound(db: DatabaseClient, game: GameRow, position: number) {
-  const round = game.plan[position];
-  const startedAt = new Date();
-  const endsAt = new Date(startedAt.getTime() + round.durationMs);
-  const { error: roundError } = await db
-    .from("landmark_game_rounds")
-    .update({
-      status: "open",
-      started_at: startedAt.toISOString(),
-      ends_at: endsAt.toISOString(),
-    })
+function numericMillis(value: unknown, label: string) {
+  const milliseconds = Number(value);
+  if (!Number.isSafeInteger(milliseconds) || milliseconds < 0) {
+    throw new Error(`GenLayer returned an invalid ${label}.`);
+  }
+  return milliseconds;
+}
+
+function gameContract(game: GameRow) {
+  const address = game.contract_address ?? (game.contract_version === "v4" ? V4_CONTRACT_ADDRESS : null);
+  if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) throw new Error("Game contract is missing.");
+  return address as `0x${string}`;
+}
+
+async function scheduleRegisteredGame(
+  db: DatabaseClient,
+  game: GameRow,
+  readClient: GenLayerReadClient,
+) {
+  const contractGame = await readClient.readContract({
+    address: gameContract(game),
+    functionName: "get_game",
+    args: [game.contract_game_id],
+    stateStatus: "finalized",
+  }) as Record<string, unknown>;
+  const startMs = numericMillis(contractGame.start_ms, "game start");
+  const windows = await Promise.all(game.plan.map(async (_round, position) => {
+    const value = await readClient.readContract({
+      address: gameContract(game),
+      functionName: "get_round_window",
+      args: [game.contract_game_id, position],
+      stateStatus: "finalized",
+    }) as Record<string, unknown>;
+    return {
+      position,
+      startMs: numericMillis(value.start_ms, "round start"),
+      commitDeadlineMs: numericMillis(value.commit_deadline_ms, "commit deadline"),
+      revealDeadlineMs: numericMillis(value.reveal_deadline_ms, "reveal deadline"),
+      finalizeAfterMs: numericMillis(value.finalize_after_ms, "finalize deadline"),
+    };
+  }));
+  if (windows[0]?.startMs !== startMs) throw new Error("GenLayer returned an inconsistent game schedule.");
+
+  await Promise.all(windows.map(async (window) => {
+    const { error } = await db.from("landmark_game_rounds").update({
+      started_at: new Date(window.startMs).toISOString(),
+      ends_at: new Date(window.commitDeadlineMs).toISOString(),
+      reveal_deadline: new Date(window.revealDeadlineMs).toISOString(),
+      finalize_after: new Date(window.finalizeAfterMs).toISOString(),
+    }).eq("game_id", game.id).eq("position", window.position);
+    if (error) throw error;
+  }));
+  const { error } = await db.from("landmark_games").update({
+    started_at: new Date(startMs).toISOString(),
+    next_check_at: new Date(startMs).toISOString(),
+    error_message: null,
+    updated_at: new Date().toISOString(),
+  }).eq("id", game.id).eq("status", "registering");
+  if (error) throw error;
+}
+
+async function syncScheduledClock(db: DatabaseClient, game: GameRow) {
+  const { data, error } = await db.from("landmark_game_rounds")
+    .select("*")
     .eq("game_id", game.id)
-    .eq("position", position)
-    .eq("status", "queued");
-  if (roundError) throw roundError;
-  const gameUpdate: Record<string, unknown> = {
-    status: "running",
-    current_round: position,
+    .order("position", { ascending: true });
+  if (error) throw error;
+  const rounds = (data ?? []) as RoundRow[];
+  if (!rounds.length || rounds.some((round) => !round.started_at || !round.ends_at)) return;
+  const nowMs = Date.now();
+  const firstStartMs = Date.parse(rounds[0].started_at as string);
+  const lastEndMs = Date.parse(rounds[rounds.length - 1].ends_at as string);
+  if (nowMs < firstStartMs) return;
+
+  const current = rounds.reduce((selected, round) => {
+    const start = Date.parse(round.started_at as string);
+    return start <= nowMs ? round.position : selected;
+  }, 0);
+  const verifying = nowMs > lastEndMs;
+  const activeRound = rounds.find((round) => round.position === current);
+  if (activeRound?.status === "queued" && nowMs <= Date.parse(activeRound.ends_at as string)) {
+    const { error: roundError } = await db.from("landmark_game_rounds")
+      .update({ status: "open" })
+      .eq("id", activeRound.id)
+      .eq("status", "queued");
+    if (roundError) throw roundError;
+  }
+  const { error: gameError } = await db.from("landmark_games").update({
+    status: verifying ? "verifying" : "running",
+    current_round: verifying ? game.round_count : current,
     next_check_at: null,
-    updated_at: startedAt.toISOString(),
-  };
-  if (!game.started_at) gameUpdate.started_at = startedAt.toISOString();
-  const { error: gameError } = await db
-    .from("landmark_games")
-    .update(gameUpdate)
-    .eq("id", game.id);
+    updated_at: new Date().toISOString(),
+  }).eq("id", game.id).in("status", ["registering", "running", "verifying"]);
   if (gameError) throw gameError;
 }
 
-async function submitRound(
+async function submitDueReveal(
   db: DatabaseClient,
   game: GameRow,
-  round: RoundRow,
   writeClient: GenLayerWriteClient,
 ) {
-  const [{ data: players, error: playerError }, { data: answers, error: answerError }] = await Promise.all([
-    db.from("landmark_game_players").select("id,player_hash").eq("game_id", game.id),
-    db.from("landmark_game_answers").select("player_id,choice_index,elapsed_ms").eq("round_id", round.id),
-  ]);
-  if (playerError || answerError) throw playerError ?? answerError;
-  const playerHashes = new Map((players ?? []).map((player) => [player.id, player.player_hash]));
-  const contractAnswers = (answers ?? []).map((answer) => ({
-    player_hash: playerHashes.get(answer.player_id),
-    choice_index: answer.choice_index,
-    elapsed_ms: answer.elapsed_ms,
-  })).filter((answer) => typeof answer.player_hash === "string");
+  const now = new Date().toISOString();
+  const { data: due, error } = await db.from("landmark_game_rounds")
+    .select("*")
+    .eq("game_id", game.id)
+    .in("status", ["queued", "open"])
+    .lte("ends_at", now)
+    .order("position", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error || !due) return;
+  const { data: round } = await db.from("landmark_game_rounds")
+    .update({ status: "revealing", next_check_at: new Date(Date.now() + 5_000).toISOString() })
+    .eq("id", due.id)
+    .in("status", ["queued", "open"])
+    .select("*")
+    .maybeSingle();
+  if (!round) return;
 
-  const transactionHash = await writeClient.writeContract({
-    address: CONTRACT_ADDRESS as `0x${string}`,
-    functionName: "settle_round",
-    leaderOnly: false,
-    args: [
-      game.contract_game_id,
-      round.position,
-      JSON.stringify(contractAnswers),
-    ],
-  });
-  const { error } = await db
-    .from("landmark_game_rounds")
-    .update({
-      status: "pending",
-      transaction_hash: transactionHash,
-      next_check_at: new Date(Date.now() + 4_000).toISOString(),
+  try {
+    const [{ data: players, error: playersError }, { data: answers, error: answersError }] = await Promise.all([
+      db.from("landmark_game_players").select("id,signer_address").eq("game_id", game.id),
+      db.from("landmark_game_answers").select("player_id,choice_index,reveal_salt").eq("round_id", round.id),
+    ]);
+    if (playersError || answersError) throw playersError ?? answersError;
+    const signers = new Map((players ?? []).map((player) => [player.id, player.signer_address]));
+    const reveals = (answers ?? []).flatMap((answer) => {
+      const playerAddress = signers.get(answer.player_id);
+      return typeof playerAddress === "string" && typeof answer.reveal_salt === "string"
+        ? [{ player_address: playerAddress, choice_index: answer.choice_index, salt: answer.reveal_salt }]
+        : [];
+    });
+    const transactionHash = await writeClient.writeContract({
+      address: gameContract(game),
+      functionName: "reveal_answers",
+      // Deterministic reveal transport only. XP remains gated by the separate
+      // non-leader-only finalize_round transaction below.
+      leaderOnly: true,
+      args: [game.contract_game_id, round.position, JSON.stringify(reveals)],
+      value: 0n,
+    });
+    const { error: updateError } = await db.from("landmark_game_rounds").update({
+      reveal_transaction_hash: transactionHash,
+      next_check_at: new Date(Date.now() + 5_000).toISOString(),
       error_message: null,
-    })
-    .eq("id", round.id)
-    .eq("status", "submitting");
-  if (error) throw error;
-  console.log(JSON.stringify({
-    event: "lobby_round_submitted",
-    gameId: game.contract_game_id,
-    round: round.position,
-    transactionHash,
-  }));
-
-  if (round.position + 1 < game.round_count) {
-    await openRound(db, game, round.position + 1);
-  } else {
-    const { error: gameError } = await db
-      .from("landmark_games")
-      .update({
-        status: "verifying",
-        current_round: game.round_count,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", game.id);
-    if (gameError) throw gameError;
+    }).eq("id", round.id).eq("status", "revealing");
+    if (updateError) throw updateError;
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    await db.from("landmark_game_rounds").update({
+      status: "open",
+      next_check_at: new Date(Date.now() + 8_000).toISOString(),
+      error_message: message.slice(0, 500),
+    }).eq("id", round.id).eq("status", "revealing");
   }
 }
 
-async function checkPendingRound(
+async function checkRevealReceipt(db: DatabaseClient, game: GameRow, readClient: GenLayerReadClient) {
+  const now = new Date().toISOString();
+  const { data: round, error } = await db.from("landmark_game_rounds")
+    .select("*")
+    .eq("game_id", game.id)
+    .eq("status", "revealing")
+    .not("reveal_transaction_hash", "is", null)
+    .lte("next_check_at", now)
+    .order("position", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error || !round?.reveal_transaction_hash) return;
+  await db.from("landmark_game_rounds").update({
+    next_check_at: new Date(Date.now() + 6_000).toISOString(),
+  }).eq("id", round.id).eq("status", "revealing").lte("next_check_at", now);
+  let receipt: unknown;
+  try {
+    receipt = await readClient.getTransaction({ hash: round.reveal_transaction_hash });
+  } catch (caught) {
+    if (/not found|timed out/i.test(caught instanceof Error ? caught.message : String(caught))) return;
+    throw caught;
+  }
+  if (!isTerminal(receipt)) return;
+  if (hasSuccessfulFinalizedExecution(receipt)) {
+    const { error: updateError } = await db.from("landmark_game_rounds").update({
+      status: "revealed",
+      consensus_status: statusName(receipt),
+      next_check_at: null,
+      error_message: null,
+    }).eq("id", round.id).eq("status", "revealing");
+    if (updateError) throw updateError;
+    return;
+  }
+
+  const canRetry = Date.now() < Date.parse(round.reveal_deadline as string);
+  const conciseError = canRetry ? "Answer reveal is retrying." : "Answers could not be revealed.";
+  if (canRetry) {
+    const { error: retryError } = await db.from("landmark_game_rounds").update({
+      status: "open",
+      reveal_transaction_hash: null,
+      consensus_status: statusName(receipt),
+      next_check_at: new Date(Date.now() + 8_000).toISOString(),
+      error_message: conciseError,
+    }).eq("id", round.id).eq("status", "revealing");
+    if (retryError) throw retryError;
+    return;
+  }
+  await Promise.all([
+    db.from("landmark_game_rounds").update({
+      status: "failed",
+      consensus_status: statusName(receipt),
+      next_check_at: null,
+      error_message: conciseError,
+    }).eq("id", round.id).eq("status", "revealing"),
+    db.from("landmark_games").update({
+      status: "error",
+      error_message: conciseError,
+      updated_at: new Date().toISOString(),
+    }).eq("id", game.id),
+  ]);
+}
+
+async function submitDueFinalization(
+  db: DatabaseClient,
+  game: GameRow,
+  writeClient: GenLayerWriteClient,
+) {
+  const now = new Date().toISOString();
+  const { data: due, error } = await db.from("landmark_game_rounds")
+    .select("*")
+    .eq("game_id", game.id)
+    .in("status", ["queued", "open", "revealing", "revealed"])
+    .lte("finalize_after", now)
+    .order("position", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error || !due) return;
+  const { data: round } = await db.from("landmark_game_rounds")
+    .update({ status: "finalizing", next_check_at: new Date(Date.now() + 5_000).toISOString() })
+    .eq("id", due.id)
+    .in("status", ["queued", "open", "revealing", "revealed"])
+    .select("*")
+    .maybeSingle();
+  if (!round) return;
+  try {
+    const transactionHash = await writeClient.writeContract({
+      address: gameContract(game),
+      functionName: "finalize_round",
+      leaderOnly: false,
+      args: [game.contract_game_id, round.position],
+      value: 0n,
+    });
+    const { error: updateError } = await db.from("landmark_game_rounds").update({
+      finalize_transaction_hash: transactionHash,
+      transaction_hash: transactionHash,
+      next_check_at: new Date(Date.now() + 5_000).toISOString(),
+      error_message: null,
+    }).eq("id", round.id).eq("status", "finalizing");
+    if (updateError) throw updateError;
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    await db.from("landmark_game_rounds").update({
+      status: "revealed",
+      next_check_at: new Date(Date.now() + 8_000).toISOString(),
+      error_message: message.slice(0, 500),
+    }).eq("id", round.id).eq("status", "finalizing");
+  }
+}
+
+async function checkFinalizationReceipt(
   db: DatabaseClient,
   game: GameRow,
   readClient: GenLayerReadClient,
 ) {
   const now = new Date().toISOString();
-  const { data: round, error } = await db
-    .from("landmark_game_rounds")
+  const { data: round, error } = await db.from("landmark_game_rounds")
     .select("*")
     .eq("game_id", game.id)
-    .eq("status", "pending")
+    .eq("status", "finalizing")
+    .not("finalize_transaction_hash", "is", null)
     .lte("next_check_at", now)
     .order("position", { ascending: true })
     .limit(1)
     .maybeSingle();
-  if (error || !round?.transaction_hash) return;
-
-  const { data: claimedRound } = await db
-    .from("landmark_game_rounds")
-    .update({ next_check_at: new Date(Date.now() + 5_000).toISOString() })
-    .eq("id", round.id)
-    .eq("status", "pending")
-    .lte("next_check_at", now)
-    .select("*")
-    .maybeSingle();
-  if (!claimedRound) return;
-
+  if (error || !round?.finalize_transaction_hash) return;
+  await db.from("landmark_game_rounds").update({
+    next_check_at: new Date(Date.now() + 6_000).toISOString(),
+  }).eq("id", round.id).eq("status", "finalizing").lte("next_check_at", now);
   let receipt: unknown;
   try {
-    receipt = await readClient.getTransaction({ hash: round.transaction_hash });
+    receipt = await readClient.getTransaction({ hash: round.finalize_transaction_hash });
   } catch (caught) {
     if (/not found|timed out/i.test(caught instanceof Error ? caught.message : String(caught))) return;
     throw caught;
   }
   if (!isTerminal(receipt)) return;
   if (!hasGenuineConsensus(receipt)) {
+    const failure = executionFailureReason(receipt);
+    const conciseError = failure?.startsWith("[EXTERNAL]")
+      ? "The round source could not be verified."
+      : failure?.startsWith("[LLM_ERROR]")
+      ? "Validators could not verify this round."
+      : "Consensus did not finish.";
     await Promise.all([
       db.from("landmark_game_rounds").update({
         status: "failed",
         consensus_status: statusName(receipt),
-        error_message: "Consensus did not finish.",
+        error_message: conciseError,
       }).eq("id", round.id),
       db.from("landmark_games").update({
         status: "error",
-        error_message: "A round could not be sealed.",
+        error_message: conciseError,
         updated_at: new Date().toISOString(),
       }).eq("id", game.id),
     ]);
     return;
   }
-
   const result = await readClient.readContract({
-    address: CONTRACT_ADDRESS,
+    address: gameContract(game),
     functionName: "get_round_result",
     args: [game.contract_game_id, round.position],
     stateStatus: "finalized",
@@ -468,7 +671,7 @@ async function checkPendingRound(
   if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) {
     throw new Error("GenLayer returned an invalid round result.");
   }
-  const { error: applyError } = await db.rpc("landmark_apply_round_settlement", {
+  const { error: applyError } = await db.rpc("landmark_apply_round_settlement_v4", {
     p_round_id: round.id,
     p_correct_index: correctIndex,
     p_scores: scores,
@@ -478,86 +681,57 @@ async function checkPendingRound(
 }
 
 async function progressGame(db: DatabaseClient, originalGame: GameRow) {
-  if (originalGame.status === "waiting" || originalGame.status === "finished" || originalGame.status === "error") return;
+  if (
+    originalGame.status === "waiting"
+    || originalGame.status === "finished"
+    || originalGame.status === "error"
+    || originalGame.contract_version !== "v4"
+  ) return;
   const { readClient, writeClient } = await genlayerClients();
   let game = originalGame;
 
-  if (game.status === "registering" && game.registration_tx_hash) {
+  if (game.status === "registering" && game.registration_tx_hash && !game.started_at) {
     const now = new Date().toISOString();
-    const { data: claimed } = await db
-      .from("landmark_games")
-      .update({ next_check_at: new Date(Date.now() + 4_000).toISOString() })
+    const { data: claimed } = await db.from("landmark_games")
+      .update({ next_check_at: new Date(Date.now() + 5_000).toISOString() })
       .eq("id", game.id)
       .eq("status", "registering")
       .or(`next_check_at.is.null,next_check_at.lte.${now}`)
       .select("*")
       .maybeSingle();
-    if (claimed) {
-      let receipt: unknown;
-      try {
-        receipt = await readClient.getTransaction({ hash: game.registration_tx_hash });
-      } catch (caught) {
-        if (/not found|timed out/i.test(caught instanceof Error ? caught.message : String(caught))) return;
-        throw caught;
-      }
-      if (!isTerminal(receipt)) return;
-      if (!hasGenuineConsensus(receipt)) {
-        await db.from("landmark_games").update({
-          status: "error",
-          error_message: "The lobby could not be registered.",
-          updated_at: new Date().toISOString(),
-        }).eq("id", game.id);
-        return;
-      }
-      await readClient.readContract({
-        address: CONTRACT_ADDRESS,
-        functionName: "get_game",
-        args: [game.contract_game_id],
-        stateStatus: "finalized",
-      });
-      await openRound(db, game, 0);
+    if (!claimed) return;
+    let receipt: unknown;
+    try {
+      receipt = await readClient.getTransaction({ hash: game.registration_tx_hash });
+    } catch (caught) {
+      if (/not found|timed out/i.test(caught instanceof Error ? caught.message : String(caught))) return;
+      throw caught;
     }
-    return;
+    if (!isTerminal(receipt)) return;
+    if (!hasGenuineConsensus(receipt)) {
+      await db.from("landmark_games").update({
+        status: "error",
+        error_message: "The lobby could not be registered.",
+        updated_at: new Date().toISOString(),
+      }).eq("id", game.id);
+      return;
+    }
+    await scheduleRegisteredGame(db, game, readClient);
   }
 
-  if (game.status === "running") {
-    const { data: currentRound } = await db
-      .from("landmark_game_rounds")
-      .select("*")
-      .eq("game_id", game.id)
-      .eq("position", game.current_round)
-      .maybeSingle();
-    if (
-      currentRound
-      && currentRound.status === "open"
-      && currentRound.ends_at
-      && Date.parse(currentRound.ends_at) <= Date.now()
-    ) {
-      const { data: claimedRound } = await db
-        .from("landmark_game_rounds")
-        .update({ status: "submitting" })
-        .eq("id", currentRound.id)
-        .eq("status", "open")
-        .select("*")
-        .maybeSingle();
-      if (claimedRound) {
-        try {
-          await submitRound(db, game, claimedRound as RoundRow, writeClient);
-        } catch (caught) {
-          const message = caught instanceof Error ? caught.message : String(caught);
-          await Promise.all([
-            db.from("landmark_game_rounds").update({ status: "failed", error_message: message }).eq("id", claimedRound.id),
-            db.from("landmark_games").update({ status: "error", error_message: "A round could not be submitted." }).eq("id", game.id),
-          ]);
-          return;
-        }
-      }
-    }
-  }
-
-  const { data: freshGame } = await db.from("landmark_games").select("*").eq("id", game.id).single();
+  const { data: freshGame, error: freshError } = await db.from("landmark_games")
+    .select("*")
+    .eq("id", game.id)
+    .single();
+  if (freshError) throw freshError;
   game = freshGame as GameRow;
-  await checkPendingRound(db, game, readClient);
+  await syncScheduledClock(db, game);
+  await Promise.all([
+    checkRevealReceipt(db, game, readClient),
+    checkFinalizationReceipt(db, game, readClient),
+  ]);
+  await submitDueReveal(db, game, writeClient);
+  await submitDueFinalization(db, game, writeClient);
 }
 
 async function gameState(db: DatabaseClient, gameId: string, playerId: string | null) {
@@ -581,7 +755,7 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
       const answer = player
         ? (await db
           .from("landmark_game_answers")
-          .select("choice_index,submitted_at")
+          .select("choice_index,submitted_at,commit_transaction_hash")
           .eq("round_id", round.id)
           .eq("player_id", player.id)
           .maybeSingle()).data
@@ -600,6 +774,10 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
         sourceUrl: challenge.sourceUrl ?? null,
         startedAt: round.started_at,
         endsAt: round.ends_at,
+        revealFallbackAt: round.ends_at
+          ? new Date(Date.parse(round.ends_at) + 45_000).toISOString()
+          : null,
+        revealDeadline: round.reveal_deadline,
         selectedIndex: answer?.choice_index ?? null,
       };
     }
@@ -614,7 +792,9 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
     isYou: entry.id === player?.id,
   }));
   const settledRounds = (rounds as RoundRow[]).filter((round) => round.status === "settled").length;
-  const pendingRounds = (rounds as RoundRow[]).filter((round) => ["submitting", "pending"].includes(round.status)).length;
+  const pendingRounds = (rounds as RoundRow[]).filter((round) => [
+    "revealing", "revealed", "finalizing", "submitting", "pending",
+  ].includes(round.status)).length;
   const winner = currentGame.winner_player_id
     ? board.find((entry) => entry.id === currentGame.winner_player_id) ?? null
     : null;
@@ -634,7 +814,9 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
     leaderboard: board,
     winner,
     error: currentGame.error_message,
-    contractAddress: CONTRACT_ADDRESS,
+    contractAddress: currentGame.contract_address,
+    contractGameId: currentGame.contract_game_id,
+    contractVersion: currentGame.contract_version,
   };
 }
 
@@ -655,7 +837,8 @@ async function gameResults(db: DatabaseClient, body: Record<string, unknown>) {
 async function createLobby(db: DatabaseClient, body: Record<string, unknown>) {
   const playerKey = normalizePlayerKey(body.playerId);
   const displayName = normalizeName(body.displayName);
-  if (!playerKey || !displayName) return json({ error: "Enter a valid player name." }, 400);
+  const signerAddress = normalizeSignerAddress(body.signerAddress);
+  if (!playerKey || !displayName || !signerAddress) return json({ error: "Enter a valid player name." }, 400);
   const playerToken = createToken();
   const playerTokenHash = await sha256Hex(`landmark-token:${playerToken}`);
   const playerHash = await sha256Hex(`find-the-landmark:${playerKey}`);
@@ -664,7 +847,12 @@ async function createLobby(db: DatabaseClient, body: Record<string, unknown>) {
     const code = createCode();
     const { data: game, error: gameError } = await db
       .from("landmark_games")
-      .insert({ code, host_player_key: playerKey })
+      .insert({
+        code,
+        host_player_key: playerKey,
+        contract_version: "v4",
+        contract_address: V4_CONTRACT_ADDRESS,
+      })
       .select("*")
       .single();
     if (gameError) {
@@ -677,6 +865,7 @@ async function createLobby(db: DatabaseClient, body: Record<string, unknown>) {
         game_id: game.id,
         player_key: playerKey,
         player_hash: playerHash,
+        signer_address: signerAddress,
         player_token_hash: playerTokenHash,
         display_name: displayName,
         is_host: true,
@@ -696,10 +885,12 @@ async function joinLobby(db: DatabaseClient, body: Record<string, unknown>) {
   const code = normalizeCode(body.code);
   const playerKey = normalizePlayerKey(body.playerId);
   const displayName = normalizeName(body.displayName);
-  if (!code || !playerKey || !displayName) return json({ error: "Check the lobby code and player name." }, 400);
+  const signerAddress = normalizeSignerAddress(body.signerAddress);
+  if (!code || !playerKey || !displayName || !signerAddress) return json({ error: "Check the lobby code and player name." }, 400);
   const { data: game } = await db.from("landmark_games").select("*").eq("code", code).maybeSingle();
   if (!game) return json({ error: "Lobby not found." }, 404);
   if (game.status !== "waiting") return json({ error: "That game has already started." }, 409);
+  if (game.contract_version !== "v4") return json({ error: "Make a new lobby." }, 409);
 
   const playerToken = createToken();
   const playerTokenHash = await sha256Hex(`landmark-token:${playerToken}`);
@@ -713,7 +904,7 @@ async function joinLobby(db: DatabaseClient, body: Record<string, unknown>) {
   if (existing) {
     const { data: player, error } = await db
       .from("landmark_game_players")
-      .update({ player_token_hash: playerTokenHash, display_name: displayName })
+      .update({ player_token_hash: playerTokenHash, display_name: displayName, signer_address: signerAddress })
       .eq("id", existing.id)
       .select("*")
       .single();
@@ -728,6 +919,7 @@ async function joinLobby(db: DatabaseClient, body: Record<string, unknown>) {
       game_id: game.id,
       player_key: playerKey,
       player_hash: playerHash,
+      signer_address: signerAddress,
       player_token_hash: playerTokenHash,
       display_name: displayName,
       is_host: false,
@@ -757,6 +949,9 @@ async function startGame(
     .order("joined_at", { ascending: true });
   if (playersError || !players?.length) throw playersError ?? new Error("Lobby has no players.");
   if (players.length < 2) return json({ error: "Need 2 players." }, 409);
+  if ((players as PlayerRow[]).some((entry) => !normalizeSignerAddress(entry.signer_address))) {
+    return json({ error: "A player must rejoin this lobby." }, 409);
+  }
   const plan = await Promise.all(createGamePlan().map(async (round) => {
     if (round.kind !== "identify") return round;
     if (!round.image) throw new Error("Round image is missing.");
@@ -765,7 +960,7 @@ async function startGame(
   const onchainPlan = contractPlan(plan);
   const contractGameId = `game-${game.id}`;
   const planText = JSON.stringify(onchainPlan);
-  const rosterText = JSON.stringify((players as PlayerRow[]).map((entry) => entry.player_hash));
+  const rosterText = JSON.stringify((players as PlayerRow[]).map((entry) => entry.signer_address));
 
   const { data: claimedGame, error: gameError } = await db
     .from("landmark_games")
@@ -774,6 +969,8 @@ async function startGame(
       plan,
       plan_hash: await sha256Hex(planText),
       contract_game_id: contractGameId,
+      contract_version: "v4",
+      contract_address: V4_CONTRACT_ADDRESS,
       round_count: plan.length,
       next_check_at: new Date(Date.now() + 4_000).toISOString(),
       updated_at: new Date().toISOString(),
@@ -805,10 +1002,11 @@ async function startGame(
   try {
     const { writeClient } = await genlayerClients();
     const transactionHash = await writeClient.writeContract({
-      address: CONTRACT_ADDRESS as `0x${string}`,
+      address: V4_CONTRACT_ADDRESS as `0x${string}`,
       functionName: "register_game",
       leaderOnly: false,
       args: [contractGameId, rosterText, planText],
+      value: 0n,
     });
     const { error } = await db.from("landmark_games").update({
       registration_tx_hash: transactionHash,
@@ -856,29 +1054,62 @@ Deno.serve(async (request: Request) => {
       const response = await startGame(db, game, player);
       if (response) return response;
     } else if (body.action === "answer") {
-      if (game.status !== "running") return json({ error: "There is no open round." }, 409);
+      if (game.status !== "running" || game.contract_version !== "v4") {
+        return json({ error: "There is no open round." }, 409);
+      }
       const choiceIndex = Number(body.choiceIndex);
+      const roundIndex = Number(body.roundIndex);
+      const commitment = normalizeDigest(body.commitment);
+      const revealSalt = normalizeDigest(body.revealSalt);
+      const commitTransactionHash = normalizeTransactionHash(body.commitTransactionHash);
+      const signerAddress = normalizeSignerAddress(player.signer_address);
       if (!Number.isInteger(choiceIndex) || choiceIndex < 0 || choiceIndex > 3) {
         return json({ error: "Choose one answer." }, 400);
       }
+      if (
+        !Number.isInteger(roundIndex)
+        || roundIndex < 0
+        || roundIndex >= game.round_count
+        || !commitment
+        || !revealSalt
+        || !commitTransactionHash
+        || !signerAddress
+        || !game.contract_game_id
+      ) return json({ error: "Answer proof is invalid." }, 400);
+      const expectedCommitment = await sha256Hex(
+        `ftl:v4:${game.contract_game_id}:${roundIndex}:${signerAddress}:${choiceIndex}:${revealSalt}`,
+      );
+      if (expectedCommitment !== commitment) return json({ error: "Answer proof is invalid." }, 400);
       const { data: round } = await db
         .from("landmark_game_rounds")
         .select("*")
         .eq("game_id", game.id)
-        .eq("position", game.current_round)
-        .eq("status", "open")
+        .eq("position", roundIndex)
         .maybeSingle();
-      if (!round?.started_at || !round.ends_at || Date.parse(round.ends_at) <= Date.now()) {
-        return json({ error: "Time is up." }, 408);
+      if (!round?.started_at || !round.ends_at || !round.reveal_deadline) {
+        return json({ error: "Round unavailable." }, 409);
       }
-      const durationMs = game.plan[game.current_round].durationMs;
-      const elapsedMs = Math.max(0, Math.min(durationMs, Date.now() - Date.parse(round.started_at)));
+      const { data: existing } = await db.from("landmark_game_answers")
+        .select("id,commitment,choice_index")
+        .eq("round_id", round.id)
+        .eq("player_id", player.id)
+        .maybeSingle();
+      if (existing) {
+        if (existing.commitment !== commitment || existing.choice_index !== choiceIndex) {
+          return json({ error: "Answer already locked." }, 409);
+        }
+        return json({ accepted: true, roundId: round.id, selectedIndex: choiceIndex });
+      }
       const { error } = await db.from("landmark_game_answers").insert({
         game_id: game.id,
         round_id: round.id,
         player_id: player.id,
         choice_index: choiceIndex,
-        elapsed_ms: elapsedMs,
+        elapsed_ms: 0,
+        signer_address: signerAddress,
+        commitment,
+        commit_transaction_hash: commitTransactionHash,
+        reveal_salt: revealSalt,
       });
       if (error) {
         if (error.code === "23505") return json({ error: "Answer already locked." }, 409);

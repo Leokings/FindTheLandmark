@@ -16,7 +16,12 @@ type GameBody = {
   displayName?: unknown;
   playerId?: unknown;
   playerToken?: unknown;
+  signerAddress?: unknown;
   choiceIndex?: unknown;
+  roundIndex?: unknown;
+  commitment?: unknown;
+  revealSalt?: unknown;
+  commitTransactionHash?: unknown;
 };
 
 function json(body: unknown, status = 200) {
@@ -119,8 +124,13 @@ export async function POST(request: Request) {
   if (input.action !== "results") body.playerId = playerId;
   if (input.action === "create" || input.action === "join") {
     const displayName = typeof input.displayName === "string" ? input.displayName.trim() : "";
+    const signerAddress = typeof input.signerAddress === "string" ? input.signerAddress.trim().toLowerCase() : "";
     if (displayName.length < 1 || displayName.length > 24) return json({ error: "Enter a player name." }, 400);
+    if (!/^0x[a-f0-9]{40}$/.test(signerAddress) || /^0x0{40}$/.test(signerAddress)) {
+      return json({ error: "Could not prepare this player." }, 400);
+    }
     body.displayName = displayName;
+    body.signerAddress = signerAddress;
   }
   if (input.action !== "create") {
     const code = typeof input.code === "string" ? input.code.trim().toUpperCase() : "";
@@ -134,10 +144,28 @@ export async function POST(request: Request) {
   }
   if (input.action === "answer") {
     const choiceIndex = Number(input.choiceIndex);
+    const roundIndex = Number(input.roundIndex);
+    const commitment = typeof input.commitment === "string" ? input.commitment.trim().toLowerCase() : "";
+    const revealSalt = typeof input.revealSalt === "string" ? input.revealSalt.trim().toLowerCase() : "";
+    const commitTransactionHash = typeof input.commitTransactionHash === "string"
+      ? input.commitTransactionHash.trim()
+      : "";
     if (!Number.isInteger(choiceIndex) || choiceIndex < 0 || choiceIndex > 3) {
       return json({ error: "Choose an answer." }, 400);
     }
+    if (
+      !Number.isInteger(roundIndex)
+      || roundIndex < 0
+      || roundIndex > 11
+      || !/^[a-f0-9]{64}$/.test(commitment)
+      || !/^[a-f0-9]{64}$/.test(revealSalt)
+      || !/^(0x)?[a-fA-F0-9]{64}$/.test(commitTransactionHash)
+    ) return json({ error: "Answer proof is invalid." }, 400);
     body.choiceIndex = choiceIndex;
+    body.roundIndex = roundIndex;
+    body.commitment = commitment;
+    body.revealSalt = revealSalt;
+    body.commitTransactionHash = commitTransactionHash;
   }
 
   const timeout = input.action === "start" ? 90_000 : input.action === "state" ? 55_000 : 25_000;

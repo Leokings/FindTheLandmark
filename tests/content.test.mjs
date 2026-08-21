@@ -16,22 +16,29 @@ test("content pool contains sixty reusable questions", () => {
   });
 });
 
-test("game plans contain twelve rounds and four sourced GenLayer quizzes", () => {
+test("game plans contain twelve rounds and seven authoritative-source quizzes", () => {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const plan = createGamePlan();
-    const docsRounds = plan.filter((round) => Boolean(round.sourceUrl));
+    const atlasRounds = plan.filter((round) => round.sourceUrl?.startsWith(
+      "https://data.unesco.org/api/explore/v2.1/catalog/datasets/whc001/records?where=id_no%3D",
+    ));
+    const docsRounds = plan.filter((round) => round.sourceUrl?.startsWith(
+      "https://raw.githubusercontent.com/genlayerlabs/genlayer-docs/9699f3900dd697689090f6595f5c14b4f0a60fdf/",
+    ));
 
     assert.equal(plan.length, 12);
     assert.equal(plan.filter((round) => round.kind === "identify").length, 5);
-    assert.equal(plan.filter((round) => round.kind === "quiz" && !round.sourceUrl).length, 3);
+    assert.equal(atlasRounds.length, 3);
     assert.equal(docsRounds.length, 4);
-    assert.ok(docsRounds.every((round) => round.sourceUrl?.startsWith("https://docs.genlayer.com/")));
-    assert.ok(docsRounds.every((round) => round.sourceExcerpt));
+    assert.ok(atlasRounds.every((round) => !round.sourceSha256));
+    assert.ok(atlasRounds.every((round) => round.sourceUrl?.endsWith("&limit=1")));
+    assert.ok(docsRounds.every((round) => /^[a-f0-9]{64}$/.test(round.sourceSha256 ?? "")));
     assert.ok(plan.every((round) => round.options.length === 4));
     assert.ok(plan.every((round) => new Set(round.options).size === 4));
 
     const onchainPlan = contractPlan(plan);
-    assert.ok(onchainPlan.every((round) => Object.hasOwn(round, "source_excerpt")));
+    assert.ok(onchainPlan.every((round) => Object.hasOwn(round, "source_sha256")));
+    assert.ok(onchainPlan.every((round) => !Object.hasOwn(round, "source_excerpt")));
   }
 });
 

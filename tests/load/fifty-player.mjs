@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { createGameSigner, commitSignedAnswer } from "../../lib/genlayer-session.ts";
 
 const baseUrl = (process.argv[2] ?? "https://find-the-landmark.vercel.app").replace(/\/$/, "");
 const runId = `${Date.now().toString(36)}${randomUUID().replaceAll("-", "").slice(0, 6)}`;
 const timings = new Map();
+const signedPlayers = new Set();
+// Three round-boundary bursts can overlap inside StudioNet's rolling minute.
+// Eight writes per round stays below its 30 write/minute public-RPC bucket.
+const ACTIVE_PLAYERS_PER_ROUND = 8;
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -52,29 +57,34 @@ async function waitForState(session, predicate, label, timeoutMs) {
 }
 
 const hostPlayerId = `load_${runId}_00`;
+const hostSigner = createGameSigner();
 const created = await gameRequest({
   action: "create",
   playerId: hostPlayerId,
   displayName: "Load 00",
+  signerAddress: hostSigner.address,
 });
 const code = created.data.code;
-const host = {
+const hostSession = {
   code,
   playerId: hostPlayerId,
   playerToken: created.data.playerToken,
 };
+const host = { session: hostSession, signer: hostSigner };
 const players = [host];
 
 const joinNumbers = Array.from({ length: 49 }, (_, index) => index + 1);
 const joined = await inBatches(joinNumbers, 10, async (index) => {
   const playerId = `load_${runId}_${String(index).padStart(2, "0")}`;
+  const signer = createGameSigner();
   const response = await gameRequest({
     action: "join",
     code,
     playerId,
     displayName: `Load ${String(index).padStart(2, "0")}`,
+    signerAddress: signer.address,
   });
-  return { code, playerId, playerToken: response.data.playerToken };
+  return { session: { code, playerId, playerToken: response.data.playerToken }, signer };
 });
 players.push(...joined);
 
@@ -83,14 +93,15 @@ const overflow = await gameRequest({
   code,
   playerId: `load_${runId}_overflow`,
   displayName: "Overflow",
+  signerAddress: createGameSigner().address,
 }, [409]);
 if (!/full/i.test(overflow.data.error ?? "")) {
   throw new Error(`51st player was not rejected as full: ${JSON.stringify(overflow.data)}`);
 }
 
-await gameRequest({ action: "start", ...host });
+await gameRequest({ action: "start", ...host.session });
 let state = await waitForState(
-  host,
+  host.session,
   (value) => value.status === "running" && value.currentRound?.position === 0,
   "game registration",
   180_000,
@@ -99,35 +110,54 @@ let state = await waitForState(
 for (let position = 0; position < 12; position += 1) {
   if (state.currentRound?.position !== position) {
     state = await waitForState(
-      host,
+      host.session,
       (value) => value.status === "running" && value.currentRound?.position === position,
       `round ${position + 1}`,
       180_000,
     );
   }
-  const answerResults = await Promise.all(players.map((player, playerIndex) => gameRequest({
-    action: "answer",
-    ...player,
-    choiceIndex: (position + playerIndex) % 4,
-  })));
+  const activePlayers = Array.from({ length: ACTIVE_PLAYERS_PER_ROUND }, (_, offset) => {
+    const playerIndex = (position * ACTIVE_PLAYERS_PER_ROUND + offset) % players.length;
+    return { player: players[playerIndex], playerIndex };
+  });
+  const answerResults = await Promise.all(activePlayers.map(async ({ player, playerIndex }) => {
+    const choiceIndex = (position + playerIndex) % 4;
+    const proof = await commitSignedAnswer({
+      signer: player.signer,
+      contractAddress: state.contractAddress,
+      contractGameId: state.contractGameId,
+      roundIndex: position,
+      choiceIndex,
+    });
+    return gameRequest({
+      action: "answer",
+      ...player.session,
+      roundIndex: position,
+      choiceIndex,
+      commitment: proof.commitment,
+      revealSalt: proof.salt,
+      commitTransactionHash: String(proof.commitTxHash),
+    });
+  }));
   if (answerResults.some(({ data }) => data.accepted !== true)) {
-    throw new Error(`round ${position + 1} did not accept all 50 answers`);
+    throw new Error(`round ${position + 1} did not accept every rotated answer`);
   }
+  activePlayers.forEach(({ player }) => signedPlayers.add(player.signer.address.toLowerCase()));
   const endsAt = Date.parse(state.currentRound.endsAt);
   await sleep(Math.max(0, endsAt - Date.now() + 250));
   state = await waitForState(
-    host,
+    host.session,
     (value) => value.status === "verifying"
       || value.status === "finished"
       || (value.status === "running" && value.currentRound?.position === position + 1),
     `round ${position + 1} submission`,
     180_000,
   );
-  console.log(`round ${position + 1}/12: 50 answers accepted`);
+  console.log(`round ${position + 1}/12: ${ACTIVE_PLAYERS_PER_ROUND} signed answers accepted`);
 }
 
 state = await waitForState(
-  host,
+  host.session,
   (value) => value.status === "finished",
   "finalized settlements",
   900_000,
@@ -138,6 +168,9 @@ if (results.status !== "finished" || results.leaderboard?.length !== 50) {
 }
 if (results.settledRounds !== 12 || results.pendingRounds !== 0) {
   throw new Error(`not every round finalized: ${JSON.stringify({ settledRounds: results.settledRounds, pendingRounds: results.pendingRounds })}`);
+}
+if (signedPlayers.size !== 50) {
+  throw new Error(`not every player signed an answer: ${signedPlayers.size}/50`);
 }
 
 const timingSummary = Object.fromEntries([...timings].map(([action, values]) => [action, {
@@ -156,6 +189,8 @@ console.log(JSON.stringify({
   pendingRounds: results.pendingRounds,
   winner: results.winner,
   overflowRejected: true,
+  signedPlayersExercised: signedPlayers.size,
+  answersPerRound: ACTIVE_PLAYERS_PER_ROUND,
   resultsLookup: true,
   timings: timingSummary,
 }, null, 2));
