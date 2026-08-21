@@ -566,6 +566,7 @@ export default function Home() {
             )}
             {error && <p className="form-error" role="alert">{error}</p>}
             <button className="primary-action" type="submit" disabled={busy}>{busy ? "WAIT…" : mode === "create" ? "MAKE LOBBY" : mode === "join" ? "ENTER ROOM" : "VIEW RESULTS"}<i>↗</i></button>
+            {mode !== "results" ? <p className="connection-notice">PLEASE STAY CONNECTED UNTIL THE GAME ENDS</p> : null}
           </form>
           <footer><span>PICTURE PICKS</span><span>ATLAS</span><span>GENLAYER DOCS</span></footer>
         </section>
@@ -614,6 +615,7 @@ export default function Home() {
           <span>{sealing ? `${game.settledRounds}/${game.roundCount}` : `00/${String(game.roundCount).padStart(2, "0")}`}</span>
           <h1>{sealing ? "SEALING\nSCORES" : "MAKING\nTHE BOARD"}</h1>
           <div className="status-loader"><i /></div>
+          {!sealing ? <p className="status-tip">TIP · PLEASE STAY CONNECTED UNTIL THE GAME ENDS</p> : null}
         </section>
         <Board entries={game.leaderboard} />
         {error && <p className="floating-error" role="alert">{error}</p>}

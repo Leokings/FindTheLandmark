@@ -252,6 +252,22 @@ a:focus-visible {
   color: rgba(16, 33, 29, 0.3);
 }
 
+.connection-notice,
+.status-tip {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  line-height: 1.45;
+}
+
+.connection-notice {
+  margin-top: -10px;
+  text-align: center;
+  opacity: 0.62;
+}
+
 .primary-action {
   min-height: 64px;
   padding: 0 22px;
@@ -534,6 +550,11 @@ a:focus-visible {
   display: block;
   background: var(--ink);
   animation: slide 1.2s ease-in-out infinite alternate;
+}
+
+.status-tip {
+  margin-top: 18px;
+  opacity: 0.72;
 }
 
 @keyframes slide {
