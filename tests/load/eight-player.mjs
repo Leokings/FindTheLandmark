@@ -37,6 +37,18 @@ async function gameRequest(body, expectedStatuses = [200, 201]) {
   return { data, elapsed, status: response.status };
 }
 
+async function confirmedAnswer(body) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await gameRequest(body);
+    } catch (error) {
+      if (!/^answer returned 503: Answer is still confirming onchain\./.test(String(error)) || attempt === 4) throw error;
+      await sleep(3_000);
+    }
+  }
+  throw new Error("Answer could not be confirmed.");
+}
+
 async function inBatches(items, batchSize, task) {
   const output = [];
   for (let offset = 0; offset < items.length; offset += batchSize) {
@@ -137,7 +149,7 @@ for (let position = 0; position < 12; position += 1) {
       roundIndex: position,
       choiceIndex,
     });
-    return gameRequest({
+    return confirmedAnswer({
       action: "answer",
       ...player.session,
       roundIndex: position,

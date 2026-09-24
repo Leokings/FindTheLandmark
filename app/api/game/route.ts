@@ -176,6 +176,6 @@ export async function POST(request: Request) {
     body.commitTransactionHash = commitTransactionHash;
   }
 
-  const timeout = input.action === "start" ? 90_000 : input.action === "state" ? 55_000 : 25_000;
+  const timeout = input.action === "start" ? 90_000 : input.action === "state" || input.action === "answer" ? 55_000 : 25_000;
   return forwardSigned(body, timeout);
 }

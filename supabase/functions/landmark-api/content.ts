@@ -518,7 +518,8 @@ export function createGamePlan(pack: GamePack = "mixed"): GameRound[] {
     docs[3],
     landmarks[4],
   ];
-  return plan.map(withShuffledOptions);
+  // Give signed StudioNet writes time to land before the onchain deadline.
+  return plan.map((round) => withShuffledOptions({ ...round, durationMs: 60_000 }));
 }
 
 export function contractPlan(plan: readonly GameRound[]) {

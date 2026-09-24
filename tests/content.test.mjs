@@ -64,6 +64,7 @@ test("themed packs remain twelve distinct rounds with verifiable sources", () =>
     const plan = createGamePlan(pack);
     assert.equal(plan.length, 12);
     assert.equal(new Set(plan.map((round) => round.challengeId)).size, 12);
+    assert.ok(plan.every((round) => round.durationMs === 60_000));
     assert.equal(plan.filter((round) => round.kind === "identify").length, expected.identify);
     assert.equal(plan.filter((round) => round.city === "Atlas quiz").length, expected.atlas);
     assert.equal(plan.filter((round) => round.city === "GenLayer docs").length, expected.docs);

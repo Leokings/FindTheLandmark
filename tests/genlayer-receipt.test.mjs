@@ -6,6 +6,7 @@ import {
   hasGenuineConsensus,
   hasSuccessfulFinalizedExecution,
   isTerminal,
+  signedCommitResult,
   statusName,
 } from "../supabase/functions/landmark-api/genlayer-receipt.ts";
 
@@ -81,4 +82,30 @@ test("extracts a finalized rollback reason", () => {
 test("normalizes numeric status codes", () => {
   assert.equal(statusName({ status: 7 }), "FINALIZED");
   assert.equal(statusName({ status_code: "5" }), "ACCEPTED");
+});
+
+test("a signed answer is confirmed only with its own successful onchain commit and timestamp", () => {
+  const expected = {
+    contractAddress: "0x1234567890123456789012345678901234567890",
+    gameId: "game-test",
+    roundIndex: 2,
+    signerAddress: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+    commitment: "a".repeat(64),
+    startMs: Date.parse("2026-09-24T12:00:00Z"),
+    endMs: Date.parse("2026-09-24T12:01:00Z"),
+  };
+  const receipt = Object.assign(finalizedReceipt(), {
+    from_address: expected.signerAddress,
+    to_address: expected.contractAddress,
+    created_at: "2026-09-24T12:00:30Z",
+    data: { calldata: { readable: `{"args":["game-test",2,"${expected.commitment}",]"method":"commit_answer"}` } },
+  });
+  assert.equal(signedCommitResult(receipt, expected), "confirmed");
+  assert.equal(signedCommitResult({ ...receipt, status_name: "ACCEPTED" }, expected), "pending");
+  assert.equal(signedCommitResult({ ...receipt, created_at: "2026-09-24T12:01:01Z" }, expected), "late");
+  assert.equal(signedCommitResult({ ...receipt, from_address: "0x0000000000000000000000000000000000000001" }, expected), "invalid");
+  assert.equal(signedCommitResult({ ...receipt, data: { calldata: { readable: "other" } } }, expected), "invalid");
+  const failed = structuredClone(receipt);
+  failed.consensus_data.leader_receipt[0].execution_result = "ERROR";
+  assert.equal(signedCommitResult(failed, expected), "invalid");
 });

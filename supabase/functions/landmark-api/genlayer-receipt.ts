@@ -113,3 +113,31 @@ export function hasGenuineConsensus(receipt: unknown) {
   const agrees = voteNames.filter((vote) => String(vote).toUpperCase() === "AGREE").length;
   return agrees > voteNames.length / 2;
 }
+
+export function signedCommitResult(receipt: unknown, expected: {
+  contractAddress: string;
+  gameId: string;
+  roundIndex: number;
+  signerAddress: string;
+  commitment: string;
+  startMs: number;
+  endMs: number;
+}): "pending" | "confirmed" | "late" | "invalid" {
+  if (!isTerminal(receipt)) return "pending";
+  if (!hasSuccessfulFinalizedExecution(receipt)) return "invalid";
+  const transaction = receipt as Record<string, unknown>;
+  const data = transaction.data as Record<string, unknown> | undefined;
+  const calldata = data?.calldata as Record<string, unknown> | undefined;
+  const readable = String(calldata?.readable ?? "");
+  const createdAt = Date.parse(String(transaction.created_at ?? ""));
+  if (
+    String(transaction.from_address ?? "").toLowerCase() !== expected.signerAddress.toLowerCase()
+    || String(transaction.to_address ?? "").toLowerCase() !== expected.contractAddress.toLowerCase()
+    || !readable.includes('"method":"commit_answer"')
+    || !readable.includes(`"${expected.gameId}"`)
+    || !readable.includes(`"${expected.commitment}"`)
+    || !readable.includes(`,${expected.roundIndex},`)
+    || !Number.isFinite(createdAt)
+  ) return "invalid";
+  return createdAt < expected.startMs || createdAt > expected.endMs ? "late" : "confirmed";
+}

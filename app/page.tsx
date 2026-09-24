@@ -84,6 +84,7 @@ type GameState = {
   code: string;
   realtimeGameId: string;
   status: GameStatus;
+  startsAt: string | null;
   isHost: boolean;
   maxPlayers: number;
   pack: "mixed" | "landmarks" | "genlayer";
@@ -399,7 +400,7 @@ export default function Home() {
   }, [game?.currentRound?.endsAt, game?.isHost, game?.status, refresh, session]);
 
   useEffect(() => {
-    if (game?.status !== "running") return;
+    if (game?.status !== "running" && game?.status !== "registering") return;
     const timer = window.setInterval(() => setNow(Date.now()), 250);
     return () => window.clearInterval(timer);
   }, [game?.status]);
@@ -429,7 +430,10 @@ export default function Home() {
               setGame((current) => current?.currentRound?.position === answer.roundIndex
                 ? { ...current, currentRound: { ...current.currentRound, selectedIndex: answer.choiceIndex } }
                 : current);
-            } catch {
+            } catch (caught) {
+              if (caught instanceof GameRequestError && caught.status === 409 && /too late onchain|did not confirm onchain/i.test(caught.message)) {
+                removePendingAnswer(answer);
+              }
               continue;
             }
           }
@@ -600,6 +604,14 @@ export default function Home() {
         ? { ...current, currentRound: { ...current.currentRound, selectedIndex: choiceIndex } }
         : current);
     } catch (caught) {
+      const pending = game.contractGameId
+        ? pendingAnswers(session.signer.address).find((entry) => entry.contractGameId === game.contractGameId && entry.roundIndex === game.currentRound?.position)
+        : null;
+      if (pending && caught instanceof GameRequestError && caught.status === 409 && /too late onchain|did not confirm onchain/i.test(caught.message)) {
+        removePendingAnswer(pending);
+        setError(caught.message);
+        return;
+      }
       const locked = game.contractGameId
         ? pendingAnswers(session.signer.address).some((entry) => entry.contractGameId === game.contractGameId && entry.roundIndex === game.currentRound?.position)
         : false;
@@ -751,6 +763,9 @@ export default function Home() {
 
   if (game.status === "registering" || game.status === "verifying") {
     const sealing = game.status === "verifying";
+    const startsIn = !sealing && game.startsAt && now
+      ? Math.max(0, Math.ceil((Date.parse(game.startsAt) - now) / 1_000))
+      : 0;
     return (
       <main className="game-shell status-shell" id="top">
         <GameHeader code={game.code} onExit={leaveGame} />
@@ -760,6 +775,7 @@ export default function Home() {
           <div className="status-loader"><i /></div>
           {game.lastResult && <LastResult result={game.lastResult} />}
           {sealing && <p className="status-tip">CHECKED {game.settledRounds + game.voidRounds} OF {game.roundCount} ROUNDS{game.voidRounds ? ` · ${game.voidRounds} VOID` : ""}</p>}
+          {!sealing && startsIn > 0 && <p className="status-tip">STARTS IN {Math.floor(startsIn / 60)}:{String(startsIn % 60).padStart(2, "0")}</p>}
           {!sealing ? <p className="status-tip">TIP · PLEASE STAY CONNECTED UNTIL THE GAME ENDS</p> : null}
         </section>
         <div className="status-details"><Board entries={game.leaderboard} /><RoundResults rounds={game.roundRecap} /></div>

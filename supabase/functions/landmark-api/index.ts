@@ -15,6 +15,7 @@ import {
   hasGenuineConsensus,
   hasSuccessfulFinalizedExecution,
   isTerminal,
+  signedCommitResult,
   statusName,
 } from "./genlayer-receipt.ts";
 
@@ -23,7 +24,7 @@ const magickWasm = await Deno.readFile(
 );
 await initializeImageMagick(magickWasm);
 
-const V4_CONTRACT_ADDRESS = "0x0c8e2c3a10003654F76C9736391fa245F120672d";
+const V4_CONTRACT_ADDRESS = "0x61D886BA5F06dC3AbcC1ac711326c1AD6aF4106e";
 const EXPECTED_RELAYER = "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec";
 const SITE_SIGNERS = [
   "0xdc2606D6c7833178fFF3D456ADEF8d97029ea196",
@@ -356,6 +357,37 @@ async function genlayerClients() {
   const writeClient = createClient({ chain: studionet, endpoint: GENLAYER_RPC_URL, account });
   if (await writeClient.getChainId() !== studionet.id) throw new Error("Wrong GenLayer network.");
   return { readClient, writeClient };
+}
+
+async function signedCommitStatus(
+  game: GameRow,
+  round: RoundRow,
+  signerAddress: string,
+  transactionHash: string,
+  commitment: string,
+): Promise<"confirmed" | "pending" | "invalid" | "late"> {
+  const { readClient } = await genlayerClients();
+  let receipt: unknown = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      receipt = await readClient.getTransaction({ hash: transactionHash });
+    } catch (caught) {
+      if (!/not found|timed out|fetch failed|ECONNRESET/i.test(caught instanceof Error ? caught.message : String(caught))) throw caught;
+    }
+    if (isTerminal(receipt)) break;
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  if (!isTerminal(receipt)) return "pending";
+  if (!round.started_at || !round.ends_at) return "invalid";
+  return signedCommitResult(receipt, {
+    contractAddress: gameContract(game),
+    gameId: game.contract_game_id as string,
+    roundIndex: round.position,
+    signerAddress,
+    commitment,
+    startMs: Date.parse(round.started_at),
+    endMs: Date.parse(round.ends_at),
+  });
 }
 
 function numericMillis(value: unknown, label: string) {
@@ -942,6 +974,7 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
     code: currentGame.code,
     realtimeGameId: currentGame.id,
     status: currentGame.status,
+    startsAt: currentGame.started_at,
     isHost: player?.is_host ?? false,
     maxPlayers: currentGame.max_players,
     pack: currentGame.pack ?? "mixed",
@@ -1217,7 +1250,7 @@ Deno.serve(async (request: Request) => {
       const response = await startGame(db, game, player);
       if (response) return response;
     } else if (body.action === "answer") {
-      if (game.status !== "running" || game.contract_version !== "v4") {
+      if (!["running", "verifying"].includes(game.status) || game.contract_version !== "v4") {
         return json({ error: "There is no open round." }, 409);
       }
       const choiceIndex = Number(body.choiceIndex);
@@ -1252,6 +1285,9 @@ Deno.serve(async (request: Request) => {
       if (!round?.started_at || !round.ends_at || !round.reveal_deadline) {
         return json({ error: "Round unavailable." }, 409);
       }
+      if (["settled", "void", "failed"].includes(round.status)) {
+        return json({ error: "The round result is already final." }, 409);
+      }
       const { data: existing } = await db.from("landmark_game_answers")
         .select("id,commitment,choice_index")
         .eq("round_id", round.id)
@@ -1263,6 +1299,12 @@ Deno.serve(async (request: Request) => {
         }
         return json({ accepted: true, roundId: round.id, selectedIndex: choiceIndex });
       }
+      const commitStatus = await signedCommitStatus(
+        game, round as RoundRow, signerAddress, commitTransactionHash, commitment,
+      );
+      if (commitStatus === "pending") return json({ error: "Answer is still confirming onchain." }, 503);
+      if (commitStatus === "late") return json({ error: "Answer was too late onchain." }, 409);
+      if (commitStatus === "invalid") return json({ error: "Answer did not confirm onchain." }, 409);
       const { error } = await db.from("landmark_game_answers").insert({
         game_id: game.id,
         round_id: round.id,

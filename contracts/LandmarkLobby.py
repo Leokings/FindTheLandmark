@@ -8,13 +8,13 @@ import re
 from urllib.parse import parse_qs, urlsplit
 
 
-POLICY_VERSION = "find-the-landmark.lobby-game.v4"
+POLICY_VERSION = "find-the-landmark.lobby-game.v4.1"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
 MAX_SOURCE_PROMPT_CHARS = 120_000
-MAX_PLAYERS = 50
+MAX_PLAYERS = 8
 MAX_ROUNDS = 12
-GAME_START_DELAY_MS = 60_000
+GAME_START_DELAY_MS = 120_000
 ROUND_GAP_MS = 5_000
 REVEAL_WINDOW_MS = 120_000
 
@@ -455,6 +455,7 @@ class LandmarkLobby(gl.Contract):
             "policy_version": self.policy_version,
             "max_players": MAX_PLAYERS,
             "max_rounds": MAX_ROUNDS,
+            "start_delay_ms": GAME_START_DELAY_MS,
             "scoring_scope": "per_game_only",
             "validator_consensus": True,
             "settlement_mode": "per_round",
