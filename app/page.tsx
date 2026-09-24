@@ -70,13 +70,13 @@ type RoundRecap = {
   kind: "identify" | "quiz";
   question: string;
   options: string[];
-  correctIndex: number;
-  correctAnswer: string;
+  correctIndex: number | null;
+  correctAnswer: string | null;
   sourceLabel: string | null;
   sourceUrl: string | null;
   creditUrl: string | null;
   choiceIndex: number | null;
-  verdict: "right" | "wrong" | "not_counted" | null;
+  verdict: "right" | "wrong" | "not_counted" | "void" | null;
   awardedXp: number;
 };
 
@@ -91,6 +91,7 @@ type GameState = {
   roundCount: number;
   currentRoundIndex: number;
   settledRounds: number;
+  voidRounds: number;
   pendingRounds: number;
   lastResult: { position: number; verdict: "right" | "wrong" | "not_counted"; awardedXp: number } | null;
   roundRecap: RoundRecap[];
@@ -224,8 +225,8 @@ function RoundResults({ rounds }: { rounds: RoundRecap[] }) {
       <ol>
         {[...rounds].reverse().map((round) => (
           <li key={round.position}>
-            <div><b>{String(round.position + 1).padStart(2, "0")}</b><strong>{round.question}</strong><span>{round.verdict === "right" ? `+${round.awardedXp} XP` : round.verdict === "wrong" ? "WRONG" : round.verdict === "not_counted" ? "NO ANSWER" : ""}</span></div>
-            <p>ANSWER · {round.correctAnswer}</p>
+            <div><b>{String(round.position + 1).padStart(2, "0")}</b><strong>{round.question}</strong><span>{round.verdict === "right" ? `+${round.awardedXp} XP` : round.verdict === "wrong" ? "WRONG" : round.verdict === "not_counted" ? "NOT COUNTED" : round.verdict === "void" ? "NO VERDICT" : ""}</span></div>
+            <p>{round.correctAnswer ? `ANSWER · ${round.correctAnswer}` : "VALIDATORS COULD NOT AGREE · NO XP"}</p>
             {round.sourceUrl && <a href={round.sourceUrl} target="_blank" rel="noreferrer">{round.sourceLabel ?? "CHECK SOURCE"} ↗</a>}
             {!round.sourceUrl && round.creditUrl && <a href={round.creditUrl} target="_blank" rel="noreferrer">PHOTO CREDIT ↗</a>}
           </li>
@@ -259,6 +260,7 @@ export default function Home() {
   const [answering, setAnswering] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [manualLink, setManualLink] = useState("");
   const [now, setNow] = useState(0);
   const [viewedResultsCode, setViewedResultsCode] = useState("");
   const recoveringAnswers = useRef(false);
@@ -271,6 +273,7 @@ export default function Home() {
     setError("");
     setBusy(false);
     setViewedResultsCode("");
+    setManualLink("");
   }, []);
 
   const refresh = useCallback(async (activeSession: Session, signal?: AbortSignal) => {
@@ -612,18 +615,28 @@ export default function Home() {
 
   const copyCode = async () => {
     if (!game) return;
-    await navigator.clipboard.writeText(game.code);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1_500);
+    try {
+      await navigator.clipboard.writeText(game.code);
+      setManualLink("");
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_500);
+    } catch {
+      setManualLink(game.code);
+    }
   };
 
   const copyLink = async (type: "room" | "results") => {
     if (!game) return;
     const url = new URL(window.location.origin);
     url.searchParams.set(type, game.code);
-    await navigator.clipboard.writeText(url.toString());
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1_500);
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      setManualLink("");
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_500);
+    } catch {
+      setManualLink(url.toString());
+    }
   };
 
   const rematch = async () => {
@@ -712,6 +725,7 @@ export default function Home() {
             <button type="button" className="room-code" onClick={copyCode}>{game.code}</button>
             <p>{copied ? "COPIED" : "TAP TO COPY"}</p>
             <button type="button" className="text-action invite-action" onClick={() => void copyLink("room")}>{copied ? "LINK COPIED" : "COPY INVITE LINK ↗"}</button>
+            {manualLink && <input className="share-fallback" aria-label="Room code or invite link" readOnly value={manualLink} onFocus={(event) => event.target.select()} />}
             <b>{game.playerCount}/{game.maxPlayers} IN</b>
             {game.isHost ? (
               <button type="button" className="primary-action start-action" onClick={startGame} disabled={busy || game.playerCount < 2}>{busy ? "STARTING…" : game.playerCount < 2 ? "NEED 2 PLAYERS" : "START GAME"}<i>→</i></button>
@@ -741,11 +755,11 @@ export default function Home() {
       <main className="game-shell status-shell" id="top">
         <GameHeader code={game.code} onExit={leaveGame} />
         <section className="status-poster">
-          <span>{sealing ? `${game.settledRounds}/${game.roundCount}` : `00/${String(game.roundCount).padStart(2, "0")}`}</span>
+          <span>{sealing ? `${game.settledRounds + game.voidRounds}/${game.roundCount}` : `00/${String(game.roundCount).padStart(2, "0")}`}</span>
           <h1>{sealing ? "CHECKING\nANSWERS" : "MAKING\nTHE BOARD"}</h1>
           <div className="status-loader"><i /></div>
           {game.lastResult && <LastResult result={game.lastResult} />}
-          {sealing && <p className="status-tip">VERIFYING {game.settledRounds} OF {game.roundCount} ROUNDS</p>}
+          {sealing && <p className="status-tip">CHECKED {game.settledRounds + game.voidRounds} OF {game.roundCount} ROUNDS{game.voidRounds ? ` · ${game.voidRounds} VOID` : ""}</p>}
           {!sealing ? <p className="status-tip">TIP · PLEASE STAY CONNECTED UNTIL THE GAME ENDS</p> : null}
         </section>
         <div className="status-details"><Board entries={game.leaderboard} /><RoundResults rounds={game.roundRecap} /></div>
@@ -776,10 +790,12 @@ export default function Home() {
           <span>WINNER</span>
           <h1>{game.winner?.displayName || "TIE GAME"}</h1>
           <strong>{game.winner?.score ?? 0} XP</strong>
+          {game.voidRounds > 0 && <p className="status-tip">{game.voidRounds} ROUND{game.voidRounds === 1 ? "" : "S"} VOID · NO XP AWARDED</p>}
           {game.lastResult && <LastResult result={game.lastResult} />}
           <div className="result-actions">
             <button type="button" className="primary-action" onClick={() => void rematch()} disabled={busy}>{busy ? "MAKING LOBBY…" : "REMATCH"}<i>↗</i></button>
             <button type="button" className="text-action" onClick={() => void copyLink("results")}>{copied ? "LINK COPIED" : "SHARE RESULTS ↗"}</button>
+            {manualLink && <input className="share-fallback" aria-label="Results link" readOnly value={manualLink} onFocus={(event) => event.target.select()} />}
             <button type="button" className="text-action" onClick={leaveGame}>NEW GAME</button>
           </div>
           {error && <p className="form-error" role="alert">{error}</p>}

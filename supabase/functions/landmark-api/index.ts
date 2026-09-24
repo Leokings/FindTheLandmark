@@ -87,7 +87,7 @@ type RoundRow = {
   position: number;
   kind: "identify" | "quiz";
   challenge_id: string;
-  status: "queued" | "open" | "revealing" | "revealed" | "finalizing" | "submitting" | "pending" | "settled" | "failed";
+  status: "queued" | "open" | "revealing" | "revealed" | "finalizing" | "submitting" | "pending" | "settled" | "void" | "failed";
   started_at: string | null;
   ends_at: string | null;
   reveal_deadline: string | null;
@@ -98,6 +98,7 @@ type RoundRow = {
   reveal_confirmed_at: string | null;
   finalize_transaction_hash: string | null;
   transaction_hash: string | null;
+  finalize_attempts: number;
   correct_index: number | null;
   consensus_status: string | null;
   next_check_at: string | null;
@@ -635,6 +636,7 @@ async function submitDueFinalization(
   const { data: round } = await db.from("landmark_game_rounds")
     .update({
       status: "finalizing",
+      finalize_attempts: Math.min(3, due.finalize_attempts + 1),
       finalize_transaction_hash: null,
       next_check_at: new Date(Date.now() + 5_000).toISOString(),
     })
@@ -696,24 +698,30 @@ async function checkFinalizationReceipt(
   }
   if (!isTerminal(receipt)) return;
   if (!hasGenuineConsensus(receipt)) {
+    const result = receipt && typeof receipt === "object" ? receipt as Record<string, unknown> : {};
+    const resultName = String(result.resultName ?? result.result_name ?? statusName(receipt));
+    if (round.finalize_attempts < 3) {
+      const { error: retryError } = await db.from("landmark_game_rounds").update({
+        status: "revealed",
+        finalize_transaction_hash: null,
+        transaction_hash: null,
+        consensus_status: resultName,
+        next_check_at: new Date(Date.now() + 15_000).toISOString(),
+        error_message: "Validators are retrying this round.",
+      }).eq("id", round.id).eq("status", "finalizing");
+      if (retryError) throw retryError;
+      return;
+    }
     const failure = executionFailureReason(receipt);
-    const conciseError = failure?.startsWith("[EXTERNAL]")
-      ? "The round source could not be verified."
-      : failure?.startsWith("[LLM_ERROR]")
-      ? "Validators could not verify this round."
-      : "Consensus did not finish.";
-    await Promise.all([
-      db.from("landmark_game_rounds").update({
-        status: "failed",
-        consensus_status: statusName(receipt),
-        error_message: conciseError,
-      }).eq("id", round.id),
-      db.from("landmark_games").update({
-        status: "error",
-        error_message: conciseError,
-        updated_at: new Date().toISOString(),
-      }).eq("id", game.id),
-    ]);
+    const reason = failure?.startsWith("[EXTERNAL]")
+      ? "The round source could not be verified. No XP awarded."
+      : "Validators could not agree. No XP awarded.";
+    const { error: voidError } = await db.rpc("landmark_void_round_v4", {
+      p_round_id: round.id,
+      p_consensus_status: resultName,
+      p_reason: reason,
+    });
+    if (voidError) throw voidError;
     return;
   }
   const result = await readClient.readContract({
@@ -902,6 +910,7 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
     isYou: entry.id === player?.id,
   }));
   const settledRounds = (rounds as RoundRow[]).filter((round) => round.status === "settled").length;
+  const voidRounds = (rounds as RoundRow[]).filter((round) => round.status === "void").length;
   const pendingRounds = (rounds as RoundRow[]).filter((round) => [
     "revealing", "revealed", "finalizing", "submitting", "pending",
   ].includes(round.status)).length;
@@ -909,7 +918,7 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
     ? board.find((entry) => entry.id === currentGame.winner_player_id) ?? null
     : null;
   const roundRecap = (rounds as RoundRow[])
-    .filter((round) => round.status === "settled" && round.correct_index !== null)
+    .filter((round) => (round.status === "settled" && round.correct_index !== null) || round.status === "void")
     .map((round) => {
       const challenge = currentGame.plan[round.position];
       const answer = answerByRound.get(round.id);
@@ -918,13 +927,13 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
         kind: challenge.kind,
         question: challenge.question,
         options: challenge.options,
-        correctIndex: round.correct_index,
-        correctAnswer: challenge.options[round.correct_index as number],
+        correctIndex: round.status === "void" ? null : round.correct_index,
+        correctAnswer: round.status === "void" ? null : challenge.options[round.correct_index as number],
         sourceLabel: challenge.sourceLabel ?? null,
         sourceUrl: challenge.sourceUrl ?? null,
         creditUrl: challenge.creditUrl ?? null,
         choiceIndex: answer?.choice_index ?? null,
-        verdict: !player ? null : answer?.correct === true ? "right" : answer?.correct === false ? "wrong" : "not_counted",
+        verdict: round.status === "void" ? "void" : !player ? null : answer?.correct === true ? "right" : answer?.correct === false ? "wrong" : "not_counted",
         awardedXp: answer?.awarded_points ?? 0,
       };
     });
@@ -940,6 +949,7 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
     roundCount: currentGame.round_count,
     currentRoundIndex: currentGame.current_round,
     settledRounds,
+    voidRounds,
     pendingRounds,
     lastResult,
     roundRecap,
@@ -1273,8 +1283,8 @@ Deno.serve(async (request: Request) => {
       return json({ error: "Invalid action." }, 400);
     }
 
-    const { data: freshGame } = await db.from("landmark_games").select("*").eq("id", game.id).single();
-    await progressGame(db, freshGame as GameRow);
+    // The cron worker owns GenLayer progress. Reads must remain cheap and
+    // independent of RPC availability, especially while rounds settle.
     return json(await gameState(db, game.id, player.id));
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
@@ -1282,7 +1292,7 @@ Deno.serve(async (request: Request) => {
     if (message === "INVALID_SESSION") return json({ error: "Lobby session expired." }, 401);
     if (message === "RATE_LIMITED") return json({ error: "Slow down." }, 429);
     if (message === "INVALID_RATE_KEY") return json({ error: "Unauthorized request." }, 401);
-    console.error(`[landmark-api] ${message}`);
+    console.error(`[landmark-api] ${message === "[object Object]" ? JSON.stringify(caught) : message}`);
     return json({ error: "The lobby could not be updated." }, 502);
   }
 });

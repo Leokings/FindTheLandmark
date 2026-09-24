@@ -6,6 +6,7 @@ const baseUrl = (process.argv[2] ?? "https://find-the-landmark.vercel.app").repl
 const runId = `${Date.now().toString(36)}${randomUUID().replaceAll("-", "").slice(0, 6)}`;
 const timings = new Map();
 const signedPlayers = new Set();
+let transientStateFailures = 0;
 // Eight signed writes per round stays below StudioNet's public-RPC bucket.
 const PLAYER_COUNT = 8;
 const ACTIVE_PLAYERS_PER_ROUND = PLAYER_COUNT;
@@ -48,7 +49,14 @@ async function waitForState(session, predicate, label, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let latest;
   while (Date.now() < deadline) {
-    latest = (await gameRequest({ action: "state", ...session })).data;
+    try {
+      latest = (await gameRequest({ action: "state", ...session })).data;
+    } catch (error) {
+      if (!/^state returned 50[234]:/.test(String(error))) throw error;
+      transientStateFailures += 1;
+      await sleep(3_000);
+      continue;
+    }
     if (latest.status === "error") throw new Error(`${label}: ${latest.error ?? "game entered error state"}`);
     if (predicate(latest)) return latest;
     await sleep(3_000);
@@ -166,9 +174,10 @@ const results = (await gameRequest({ action: "results", code })).data;
 if (results.status !== "finished" || results.leaderboard?.length !== PLAYER_COUNT) {
   throw new Error(`results lookup failed: ${JSON.stringify(results)}`);
 }
-if (results.settledRounds !== 12 || results.pendingRounds !== 0) {
-  throw new Error(`not every round finalized: ${JSON.stringify({ settledRounds: results.settledRounds, pendingRounds: results.pendingRounds })}`);
+if (results.settledRounds < 1 || results.settledRounds + results.voidRounds !== 12 || results.pendingRounds !== 0) {
+  throw new Error(`not every round resolved: ${JSON.stringify({ settledRounds: results.settledRounds, voidRounds: results.voidRounds, pendingRounds: results.pendingRounds })}`);
 }
+if (results.roundRecap?.length !== 12) throw new Error("round recap is incomplete");
 if (signedPlayers.size !== PLAYER_COUNT) {
   throw new Error(`not every player signed an answer: ${signedPlayers.size}/${PLAYER_COUNT}`);
 }
@@ -186,11 +195,13 @@ console.log(JSON.stringify({
   players: results.leaderboard.length,
   rounds: results.roundCount,
   settledRounds: results.settledRounds,
+  voidRounds: results.voidRounds,
   pendingRounds: results.pendingRounds,
   winner: results.winner,
   overflowRejected: true,
   signedPlayersExercised: signedPlayers.size,
   answersPerRound: ACTIVE_PLAYERS_PER_ROUND,
   resultsLookup: true,
+  transientStateFailures,
   timings: timingSummary,
 }, null, 2));

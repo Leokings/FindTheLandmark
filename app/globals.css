@@ -454,6 +454,18 @@ a:focus-visible {
   margin-bottom: 38px;
 }
 
+.share-fallback {
+  width: min(100%, 380px);
+  padding: 10px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  font: 700 11px var(--mono);
+}
+
+.code-panel .share-fallback {
+  margin: -24px 0 26px;
+}
+
 .code-panel > b {
   font-size: 24px;
   letter-spacing: -0.04em;
