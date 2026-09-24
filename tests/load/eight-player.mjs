@@ -8,7 +8,7 @@ const timings = new Map();
 const signedPlayers = new Set();
 let transientStateFailures = 0;
 let transientJoinFailures = 0;
-const PLAYER_COUNT = Number(process.env.LOAD_PLAYERS ?? 8);
+const PLAYER_COUNT = Number(process.argv[3] ?? process.env.LOAD_PLAYERS ?? 8);
 if (!Number.isInteger(PLAYER_COUNT) || PLAYER_COUNT < 2 || PLAYER_COUNT > 50) {
   throw new Error("LOAD_PLAYERS must be an integer from 2 to 50.");
 }
@@ -179,16 +179,18 @@ if (!/already joined/i.test(hijack.data.error ?? "")) {
   throw new Error("A different token replaced an admitted player's session.");
 }
 
-const overflow = await gameRequest({
-  action: "join",
-  code,
-  playerId: `load_${runId}_overflow`,
-  playerToken: randomBytes(32).toString("hex"),
-  displayName: "Overflow",
-  signerAddress: createGameSigner().address,
-}, [409]);
-if (!/full/i.test(overflow.data.error ?? "")) {
-  throw new Error(`Player ${PLAYER_COUNT + 1} was not rejected as full: ${JSON.stringify(overflow.data)}`);
+if (PLAYER_COUNT === 50) {
+  const overflow = await gameRequest({
+    action: "join",
+    code,
+    playerId: `load_${runId}_overflow`,
+    playerToken: randomBytes(32).toString("hex"),
+    displayName: "Overflow",
+    signerAddress: createGameSigner().address,
+  }, [409]);
+  if (!/full/i.test(overflow.data.error ?? "")) {
+    throw new Error(`Player 51 was not rejected as full: ${JSON.stringify(overflow.data)}`);
+  }
 }
 
 await gameRequest({ action: "start", ...host.session });
@@ -324,7 +326,7 @@ console.log(JSON.stringify({
   voidRounds: results.voidRounds,
   pendingRounds: results.pendingRounds,
   winner: results.winner,
-  overflowRejected: true,
+  overflowRejected: PLAYER_COUNT === 50,
   signedPlayersExercised: signedPlayers.size,
   answersPerRound: ACTIVE_PLAYERS_PER_ROUND,
   resultsLookup: true,

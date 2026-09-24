@@ -7,6 +7,7 @@
 - [StudioNet contract](https://explorer-studio.genlayer.com/address/0x219f4011bB42BEf4BEbb5aF46dfe69F7bE2eDd5c) (`find-the-landmark.lobby-game.v4.4`)
 - Room `Q6582Y`: 50 distinct signed-player sessions admitted; player 51 was rejected as full.
 - The one-machine 50-answer load run could not complete: StudioNet rejected `eth_sendRawTransaction` with `Rate limit exceeded: 30 requests per minute`. This is **not** evidence that 50 separate devices can or cannot finish a match.
+- Room `HGB3UP`: 30 players were admitted and all 30 sent signed commitments in round one (11.2 seconds). The same test machine hit StudioNet's rolling 30-request/minute limit at the start of round two. Both interrupted synthetic rooms were marked as failed so the cron worker would stop processing them.
 - Room `96VW37`: retrying create/join preserved the same room and player token, concurrent duplicate joins did not add a second player, and a different token could not take over the session.
 - Build, lint, contract lint, direct contract tests, and StudioNet deployment policy test passed. A completed 50-active-player match is **not yet verified**.
 
