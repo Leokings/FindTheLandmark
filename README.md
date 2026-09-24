@@ -1,6 +1,6 @@
 # Find the Landmark
 
-A 12-round multiplayer landmark game for up to 8 players. A host picks World Tour, Landmarks, or GenLayer Lab; everyone gets the same rounds, and the highest in-game XP wins. There is no global XP.
+A 12-round multiplayer landmark game for up to 50 players. A host picks World Tour, Landmarks, or GenLayer Lab; everyone gets the same rounds, and the highest in-game XP wins. There is no global XP.
 
 GenLayer validators settle each shared round. A round awards XP only after successful, majority-agreed `FINALIZED` consensus; scores exist only inside that game. Players sign their own answer commitments. A Supabase Cron worker advances verification every 30 seconds even if nobody has the app open. If validators cannot agree after three attempts, the round is void with no XP and the rest of the game continues.
 
@@ -26,9 +26,9 @@ python -m pytest tests/direct -q
 gltest tests/integration/ -v -s --network studionet
 ```
 
-The Results tab opens the final leaderboard for any completed game code. New lobbies are capped at 8 because the older 50-person roster test exercised only 8 simultaneous signed answerers per round. The older result remains historical evidence, not a claim of 50-active capacity.
+The Results tab opens the final leaderboard for any completed game code. New lobbies allow up to 50 players. The historical 50-person roster test did not establish 50 simultaneous signed answerers; full-participation load evidence is tracked separately in `docs/TEST-EVIDENCE.md`.
 
 - [Live app](https://find-the-landmark.vercel.app/)
-- [StudioNet contract](https://explorer-studio.genlayer.com/address/0x677388E350bef8FdfD41f8F8Dc13c558175f3C7F)
+- [StudioNet contract](https://explorer-studio.genlayer.com/address/0x219f4011bB42BEf4BEbb5aF46dfe69F7bE2eDd5c)
 - Deployment record: `deployments/studionet.json`
 - Production test: `docs/TEST-EVIDENCE.md`

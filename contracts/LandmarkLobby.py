@@ -8,11 +8,11 @@ import re
 from urllib.parse import parse_qs, urlsplit
 
 
-POLICY_VERSION = "find-the-landmark.lobby-game.v4.3"
+POLICY_VERSION = "find-the-landmark.lobby-game.v4.4"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
 MAX_SOURCE_PROMPT_CHARS = 120_000
-MAX_PLAYERS = 8
+MAX_PLAYERS = 50
 MAX_ROUNDS = 12
 GAME_START_DELAY_MS = 180_000
 ROUND_GAP_MS = 5_000

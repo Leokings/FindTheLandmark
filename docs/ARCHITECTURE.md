@@ -1,7 +1,7 @@
 # Architecture
 
 - Supabase stores lobby membership, shared rounds, answers, and the per-game board.
-- The host starts a twelve-round game for 2–8 players and chooses World Tour, Landmarks, or GenLayer Lab.
+- The host starts a twelve-round game for 2–50 players and chooses World Tour, Landmarks, or GenLayer Lab.
 - Everyone in the lobby gets the same image and/or sourced quiz rounds from the chosen pack.
 - Each player locks a salted answer commitment with a temporary in-browser GenLayer signer.
 - Deterministic commitments and reveals use StudioNet's fast path; only validator consensus can award XP.

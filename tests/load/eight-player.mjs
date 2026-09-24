@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { createGameSigner, commitSignedAnswer } from "../../lib/genlayer-session.ts";
 
@@ -7,8 +7,13 @@ const runId = `${Date.now().toString(36)}${randomUUID().replaceAll("-", "").slic
 const timings = new Map();
 const signedPlayers = new Set();
 let transientStateFailures = 0;
-// Eight signed writes per round stays below StudioNet's public-RPC bucket.
-const PLAYER_COUNT = 8;
+let transientJoinFailures = 0;
+const PLAYER_COUNT = Number(process.env.LOAD_PLAYERS ?? 8);
+if (!Number.isInteger(PLAYER_COUNT) || PLAYER_COUNT < 2 || PLAYER_COUNT > 50) {
+  throw new Error("LOAD_PLAYERS must be an integer from 2 to 50.");
+}
+// Limit the submission burst without reducing how many players answer each round.
+const SIGNED_WRITE_BATCH_SIZE = 8;
 const ACTIVE_PLAYERS_PER_ROUND = PLAYER_COUNT;
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -53,6 +58,21 @@ async function confirmedAnswer(body) {
   throw new Error("Answer could not be confirmed.");
 }
 
+async function joinedPlayer(body) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      return await gameRequest(body);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const retryable = /^join returned 50[234]:/.test(message) || /fetch failed|timed out/i.test(message);
+      if (!retryable || attempt === 7) throw error;
+      transientJoinFailures += 1;
+      await sleep(1_000 * Math.min(8, attempt + 1));
+    }
+  }
+  throw new Error("Player could not join.");
+}
+
 async function inBatches(items, batchSize, task) {
   const output = [];
   for (let offset = 0; offset < items.length; offset += batchSize) {
@@ -76,6 +96,13 @@ async function waitForState(session, predicate, label, timeoutMs) {
     }
     if (latest.status === "error") throw new Error(`${label}: ${latest.error ?? "game entered error state"}`);
     if (predicate(latest)) return latest;
+    if (label === "game registration" && latest.status === "running" && latest.currentRound?.position > 0) {
+      throw new Error(`Missed the opening round while reading game state; now at round ${latest.currentRound.position + 1}.`);
+    }
+    const expectedRound = /^round (\d+)$/.exec(label);
+    if (expectedRound && latest.status === "running" && latest.currentRound?.position > Number(expectedRound[1]) - 1) {
+      throw new Error(`Missed ${label} while reading game state; now at round ${latest.currentRound.position + 1}.`);
+    }
     await sleep(3_000);
   }
   throw new Error(`${label} timed out; last state: ${JSON.stringify(latest)}`);
@@ -83,14 +110,26 @@ async function waitForState(session, predicate, label, timeoutMs) {
 
 const hostPlayerId = `load_${runId}_00`;
 const hostSigner = createGameSigner();
+const hostToken = randomBytes(32).toString("hex");
 const created = await gameRequest({
   action: "create",
   playerId: hostPlayerId,
+  playerToken: hostToken,
   displayName: "Load 00",
   signerAddress: hostSigner.address,
 });
 const code = created.data.code;
-console.log(`Eight-player test room: ${code}`);
+console.log(`${PLAYER_COUNT}-player test room: ${code}`);
+const repeatedCreate = await gameRequest({
+  action: "create",
+  playerId: hostPlayerId,
+  playerToken: hostToken,
+  displayName: "Load 00",
+  signerAddress: hostSigner.address,
+});
+if (repeatedCreate.data.code !== code || repeatedCreate.data.playerToken !== hostToken) {
+  throw new Error("Retrying the host admission created a different lobby or session.");
+}
 const hostSession = {
   code,
   playerId: hostPlayerId,
@@ -101,13 +140,15 @@ const players = [host];
 const pendingConfirmations = [];
 
 const joinNumbers = Array.from({ length: PLAYER_COUNT - 1 }, (_, index) => index + 1);
-const joined = await inBatches(joinNumbers, 10, async (index) => {
+const joined = await inBatches(joinNumbers, 5, async (index) => {
   const playerId = `load_${runId}_${String(index).padStart(2, "0")}`;
   const signer = createGameSigner();
-  const response = await gameRequest({
+  const playerToken = randomBytes(32).toString("hex");
+  const response = await joinedPlayer({
     action: "join",
     code,
     playerId,
+    playerToken,
     displayName: `Load ${String(index).padStart(2, "0")}`,
     signerAddress: signer.address,
   });
@@ -115,15 +156,39 @@ const joined = await inBatches(joinNumbers, 10, async (index) => {
 });
 players.push(...joined);
 
+const repeatedJoin = await joinedPlayer({
+  action: "join",
+  code,
+  playerId: joined[0].session.playerId,
+  playerToken: joined[0].session.playerToken,
+  displayName: "Load 01",
+  signerAddress: joined[0].signer.address,
+});
+if (repeatedJoin.data.playerToken !== joined[0].session.playerToken) {
+  throw new Error("Retrying admission changed a player's session token.");
+}
+const hijack = await gameRequest({
+  action: "join",
+  code,
+  playerId: joined[0].session.playerId,
+  playerToken: randomBytes(32).toString("hex"),
+  displayName: "Load 01",
+  signerAddress: joined[0].signer.address,
+}, [409]);
+if (!/already joined/i.test(hijack.data.error ?? "")) {
+  throw new Error("A different token replaced an admitted player's session.");
+}
+
 const overflow = await gameRequest({
   action: "join",
   code,
   playerId: `load_${runId}_overflow`,
+  playerToken: randomBytes(32).toString("hex"),
   displayName: "Overflow",
   signerAddress: createGameSigner().address,
 }, [409]);
 if (!/full/i.test(overflow.data.error ?? "")) {
-  throw new Error(`Ninth player was not rejected as full: ${JSON.stringify(overflow.data)}`);
+  throw new Error(`Player ${PLAYER_COUNT + 1} was not rejected as full: ${JSON.stringify(overflow.data)}`);
 }
 
 await gameRequest({ action: "start", ...host.session });
@@ -147,31 +212,40 @@ for (let position = 0; position < 12; position += 1) {
     const playerIndex = (position * ACTIVE_PLAYERS_PER_ROUND + offset) % players.length;
     return { player: players[playerIndex], playerIndex };
   });
-  const signedAnswers = await Promise.all(activePlayers.map(async ({ player, playerIndex }) => {
-    const choiceIndex = (position + playerIndex) % 4;
-    const proof = await commitSignedAnswer({
-      signer: player.signer,
-      contractAddress: state.contractAddress,
-      contractGameId: state.contractGameId,
-      roundIndex: position,
-      choiceIndex,
-    });
-    return { player, choiceIndex, proof };
-  }));
-  const confirmations = Promise.all(signedAnswers.map(({ player, choiceIndex, proof }) => confirmedAnswer({
-      action: "answer",
-      ...player.session,
-      roundIndex: position,
-      choiceIndex,
-      commitment: proof.commitment,
-      revealSalt: proof.salt,
-      commitTransactionHash: String(proof.commitTxHash),
-    }))).then(
-      (results) => ({ position, results, error: null }),
-      (error) => ({ position, results: null, error }),
-    );
+  const confirmationTasks = [];
+  const commitPhaseStartedAt = performance.now();
+  for (let offset = 0; offset < activePlayers.length; offset += SIGNED_WRITE_BATCH_SIZE) {
+    const batch = activePlayers.slice(offset, offset + SIGNED_WRITE_BATCH_SIZE);
+    const signedAnswers = await Promise.all(batch.map(async ({ player, playerIndex }) => {
+      const choiceIndex = (position + playerIndex) % 4;
+      const proof = await commitSignedAnswer({
+        signer: player.signer,
+        contractAddress: state.contractAddress,
+        contractGameId: state.contractGameId,
+        roundIndex: position,
+        choiceIndex,
+      });
+      return { player, choiceIndex, proof };
+    }));
+    for (const { player, choiceIndex, proof } of signedAnswers) {
+      signedPlayers.add(player.signer.address.toLowerCase());
+      confirmationTasks.push(confirmedAnswer({
+        action: "answer",
+        ...player.session,
+        roundIndex: position,
+        choiceIndex,
+        commitment: proof.commitment,
+        revealSalt: proof.salt,
+        commitTransactionHash: String(proof.commitTxHash),
+      }));
+    }
+  }
+  const confirmations = Promise.all(confirmationTasks).then(
+    (results) => ({ position, results, error: null }),
+    (error) => ({ position, results: null, error }),
+  );
   pendingConfirmations.push(confirmations);
-  activePlayers.forEach(({ player }) => signedPlayers.add(player.signer.address.toLowerCase()));
+  console.log(`round ${position + 1}/12: ${confirmationTasks.length}/${PLAYER_COUNT} signed commitments sent in ${Math.round(performance.now() - commitPhaseStartedAt)}ms`);
   const endsAt = Date.parse(state.currentRound.endsAt);
   await sleep(Math.max(0, endsAt - Date.now() + 250));
   state = await waitForState(
@@ -182,7 +256,6 @@ for (let position = 0; position < 12; position += 1) {
     `round ${position + 1} submission`,
     180_000,
   );
-  console.log(`round ${position + 1}/12: ${ACTIVE_PLAYERS_PER_ROUND} signed commitments sent`);
 }
 
 const confirmedRounds = await Promise.all(pendingConfirmations);
@@ -206,12 +279,33 @@ if (results.status !== "finished" || results.leaderboard?.length !== PLAYER_COUN
 if (results.settledRounds < 1 || results.settledRounds + results.voidRounds !== 12 || results.pendingRounds !== 0) {
   throw new Error(`not every round resolved: ${JSON.stringify({ settledRounds: results.settledRounds, voidRounds: results.voidRounds, pendingRounds: results.pendingRounds })}`);
 }
+if (PLAYER_COUNT === 50 && (results.settledRounds !== 12 || results.voidRounds !== 0)) {
+  throw new Error(`Fifty-player match did not settle all rounds: ${results.settledRounds} settled, ${results.voidRounds} void`);
+}
 if (results.roundRecap?.length !== 12) throw new Error("round recap is incomplete");
 if (!results.leaderboard.some((entry) => entry.score > 0)) {
   throw new Error("finalized game awarded no XP despite confirmed signed answers");
 }
 if (signedPlayers.size !== PLAYER_COUNT) {
   throw new Error(`not every player signed an answer: ${signedPlayers.size}/${PLAYER_COUNT}`);
+}
+if (PLAYER_COUNT === 50) {
+  const [{ createClient }, { studionet }] = await Promise.all([
+    import("genlayer-js"),
+    import("genlayer-js/chains"),
+  ]);
+  const chain = createClient({ chain: studionet, endpoint: "https://studio.genlayer.com/api" });
+  for (let position = 0; position < 12; position += 1) {
+    const result = await chain.readContract({
+      address: state.contractAddress,
+      functionName: "get_round_result",
+      args: [state.contractGameId, position],
+      stateStatus: "finalized",
+    });
+    if (result.scores?.length !== PLAYER_COUNT) {
+      throw new Error(`round ${position + 1} finalized with only ${result.scores?.length ?? 0}/${PLAYER_COUNT} player scores`);
+    }
+  }
 }
 
 const timingSummary = Object.fromEntries([...timings].map(([action, values]) => [action, {
@@ -235,5 +329,6 @@ console.log(JSON.stringify({
   answersPerRound: ACTIVE_PLAYERS_PER_ROUND,
   resultsLookup: true,
   transientStateFailures,
+  transientJoinFailures,
   timings: timingSummary,
 }, null, 2));

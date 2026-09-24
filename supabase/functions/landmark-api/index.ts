@@ -25,7 +25,11 @@ const magickWasm = await Deno.readFile(
 );
 await initializeImageMagick(magickWasm);
 
-const V4_CONTRACT_ADDRESS = "0x677388E350bef8FdfD41f8F8Dc13c558175f3C7F";
+const V4_CONTRACT_ADDRESS = "0x219f4011bB42BEf4BEbb5aF46dfe69F7bE2eDd5c";
+const TWO_STEP_ACTIVATION_CONTRACTS = new Set([
+  V4_CONTRACT_ADDRESS.toLowerCase(),
+  "0x677388E350bef8FdfD41f8F8Dc13c558175f3C7F".toLowerCase(),
+]);
 const EXPECTED_RELAYER = "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec";
 const SITE_SIGNERS = [
   "0xdc2606D6c7833178fFF3D456ADEF8d97029ea196",
@@ -429,6 +433,10 @@ function gameContract(game: GameRow) {
   return address as `0x${string}`;
 }
 
+function usesTwoStepActivation(game: GameRow) {
+  return TWO_STEP_ACTIVATION_CONTRACTS.has(gameContract(game).toLowerCase());
+}
+
 async function scheduleRegisteredGame(
   db: DatabaseClient,
   game: GameRow,
@@ -829,7 +837,7 @@ async function progressGame(db: DatabaseClient, originalGame: GameRow) {
       .select("*")
       .maybeSingle();
     if (!claimed) return;
-    const twoStepActivation = gameContract(game).toLowerCase() === V4_CONTRACT_ADDRESS.toLowerCase();
+    const twoStepActivation = usesTwoStepActivation(game);
     const transactionHash = twoStepActivation && game.activation_tx_hash
       ? game.activation_tx_hash
       : game.registration_tx_hash;
@@ -1065,15 +1073,55 @@ async function gameResults(db: DatabaseClient, body: Record<string, unknown>) {
   return json(await gameState(db, game.id, null));
 }
 
+async function entryResponse(
+  db: DatabaseClient,
+  game: { id: string; code: string },
+  player: { id: string },
+  playerToken: string,
+  clientToken: boolean,
+  status = 200,
+) {
+  // New clients fetch the board separately. Admission should not wait on
+  // several unrelated state queries while a room is filling up.
+  const body = clientToken
+    ? { code: game.code, playerToken }
+    : { playerToken, ...(await gameState(db, game.id, player.id)) };
+  return json(body, status);
+}
+
 async function createLobby(db: DatabaseClient, body: Record<string, unknown>) {
   const playerKey = normalizePlayerKey(body.playerId);
   const displayName = normalizeName(body.displayName);
   const signerAddress = normalizeSignerAddress(body.signerAddress);
   const pack = normalizePack(body.pack ?? "mixed");
   if (!playerKey || !displayName || !signerAddress || !pack) return json({ error: "Check the player name and game pack." }, 400);
-  const playerToken = createToken();
+  const requestedToken = normalizeToken(body.playerToken);
+  const playerToken = requestedToken ?? createToken();
   const playerTokenHash = await sha256Hex(`landmark-token:${playerToken}`);
   const playerHash = await sha256Hex(`find-the-landmark:${playerKey}`);
+
+  async function existingCreate() {
+    const { data: game, error: gameError } = await db.from("landmark_games")
+      .select("id,code,host_player_key")
+      .eq("host_player_key", playerKey)
+      .maybeSingle();
+    if (gameError) throw gameError;
+    if (!game) return null;
+    const { data: player, error: playerError } = await db.from("landmark_game_players")
+      .select("id,player_token_hash,signer_address,is_host")
+      .eq("game_id", game.id)
+      .eq("player_key", playerKey)
+      .maybeSingle();
+    if (playerError) throw playerError;
+    if (!player) return json({ error: "Lobby creation is still finishing. Try again." }, 503);
+    if (!player.is_host || player.player_token_hash !== playerTokenHash || player.signer_address !== signerAddress) {
+      return json({ error: "This player already has a lobby." }, 409);
+    }
+    return entryResponse(db, game, player, playerToken, Boolean(requestedToken));
+  }
+
+  const previous = await existingCreate();
+  if (previous) return previous;
 
   for (let attempt = 0; attempt < 6; attempt += 1) {
     const code = createCode();
@@ -1089,7 +1137,11 @@ async function createLobby(db: DatabaseClient, body: Record<string, unknown>) {
       .select("*")
       .single();
     if (gameError) {
-      if (gameError.code === "23505") continue;
+      if (gameError.code === "23505") {
+        const recovered = await existingCreate();
+        if (recovered) return recovered;
+        continue;
+      }
       throw gameError;
     }
     const { data: player, error: playerError } = await db
@@ -1109,7 +1161,7 @@ async function createLobby(db: DatabaseClient, body: Record<string, unknown>) {
       await db.from("landmark_games").delete().eq("id", game.id);
       throw playerError;
     }
-    return json({ playerToken, ...(await gameState(db, game.id, player.id)) }, 201);
+    return entryResponse(db, game, player, playerToken, Boolean(requestedToken), 201);
   }
   return json({ error: "Could not create a lobby code." }, 503);
 }
@@ -1120,31 +1172,39 @@ async function joinLobby(db: DatabaseClient, body: Record<string, unknown>) {
   const displayName = normalizeName(body.displayName);
   const signerAddress = normalizeSignerAddress(body.signerAddress);
   if (!code || !playerKey || !displayName || !signerAddress) return json({ error: "Check the lobby code and player name." }, 400);
-  const { data: game } = await db.from("landmark_games").select("*").eq("code", code).maybeSingle();
+  const { data: game, error: gameError } = await db.from("landmark_games")
+    .select("id,code,status,contract_version")
+    .eq("code", code)
+    .maybeSingle();
+  if (gameError) throw gameError;
   if (!game) return json({ error: "Lobby not found." }, 404);
-  if (game.status !== "waiting") return json({ error: "That game has already started." }, 409);
-  if (game.contract_version !== "v4") return json({ error: "Make a new lobby." }, 409);
 
-  const playerToken = createToken();
+  const requestedToken = normalizeToken(body.playerToken);
+  const playerToken = requestedToken ?? createToken();
   const playerTokenHash = await sha256Hex(`landmark-token:${playerToken}`);
   const playerHash = await sha256Hex(`find-the-landmark:${playerKey}`);
-  const { data: existing } = await db
+
+  async function existingJoin() {
+    const { data: existing, error } = await db
     .from("landmark_game_players")
-    .select("*")
+    .select("id,player_token_hash,signer_address")
     .eq("game_id", game.id)
     .eq("player_key", playerKey)
     .maybeSingle();
-  if (existing) {
-    const { data: player, error } = await db
-      .from("landmark_game_players")
-      .update({ player_token_hash: playerTokenHash, display_name: displayName, signer_address: signerAddress })
-      .eq("id", existing.id)
-      .select("*")
-      .single();
-    if (error?.code === "23505") return json({ error: "Name already taken." }, 409);
     if (error) throw error;
-    return json({ playerToken, ...(await gameState(db, game.id, player.id)) });
+    if (!existing) return null;
+    if (existing.player_token_hash !== playerTokenHash || existing.signer_address !== signerAddress) {
+      return json({ error: "This player has already joined." }, 409);
+    }
+    // A timed-out response may arrive after the host starts. The same player
+    // can still recover their admission, but no new player can enter.
+    return entryResponse(db, game, existing, playerToken, Boolean(requestedToken));
   }
+
+  const previous = await existingJoin();
+  if (previous) return previous;
+  if (game.status !== "waiting") return json({ error: "That game has already started." }, 409);
+  if (game.contract_version !== "v4") return json({ error: "Make a new lobby." }, 409);
 
   const { data: player, error } = await db
     .from("landmark_game_players")
@@ -1160,12 +1220,16 @@ async function joinLobby(db: DatabaseClient, body: Record<string, unknown>) {
     .select("*")
     .single();
   if (error) {
-    if (error.code === "23505") return json({ error: "Name already taken." }, 409);
+    if (error.code === "23505") {
+      const recovered = await existingJoin();
+      if (recovered) return recovered;
+      return json({ error: "Name already taken." }, 409);
+    }
     if (/lobby is full/i.test(error.message)) return json({ error: "Lobby is full." }, 409);
     if (/game already started/i.test(error.message)) return json({ error: "That game has already started." }, 409);
     throw error;
   }
-  return json({ playerToken, ...(await gameState(db, game.id, player.id)) });
+  return entryResponse(db, game, player, playerToken, Boolean(requestedToken));
 }
 
 async function startGame(
@@ -1370,7 +1434,7 @@ Deno.serve(async (request: Request) => {
         commitment,
         // New contracts prove sender, commitment, and timestamp directly in
         // finalized storage. An unverified client-provided hash is not evidence.
-        commit_transaction_hash: game.contract_address?.toLowerCase() === V4_CONTRACT_ADDRESS.toLowerCase()
+        commit_transaction_hash: usesTwoStepActivation(game)
           ? null
           : commitTransactionHash,
         reveal_salt: revealSalt,

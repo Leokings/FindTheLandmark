@@ -86,6 +86,7 @@ async function forwardSigned(body: Record<string, unknown>, timeoutMs: number) {
     return json(data, response.status);
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "AbortError";
+    console.warn(`[landmark-proxy] ${String(body.action)} ${timedOut ? "timed out" : "failed"} while forwarding`);
     return json({ error: timedOut ? "Still working. Try again." : "Game service unavailable." }, timedOut ? 504 : 502);
   } finally {
     clearTimeout(timeout);
@@ -132,6 +133,11 @@ export async function POST(request: Request) {
     }
     body.displayName = displayName;
     body.signerAddress = signerAddress;
+    if (input.playerToken !== undefined) {
+      const playerToken = typeof input.playerToken === "string" ? input.playerToken.trim() : "";
+      if (!/^[a-f0-9]{64}$/.test(playerToken)) return json({ error: "Could not prepare this player." }, 400);
+      body.playerToken = playerToken;
+    }
   }
   if (input.action === "create") {
     const pack = input.pack ?? "mixed";
@@ -176,6 +182,16 @@ export async function POST(request: Request) {
     body.commitTransactionHash = commitTransactionHash;
   }
 
-  const timeout = input.action === "start" ? 90_000 : input.action === "state" || input.action === "answer" ? 55_000 : 25_000;
+  const timeout = input.action === "start" ? 90_000
+    : input.action === "answer" ? 55_000
+    : input.action === "create" || input.action === "join" ? 20_000
+    : 8_000;
+  if (input.action === "state" || input.action === "results") {
+    // These reads are safe to retry. A stalled network hop must not consume
+    // most of a 60-second answer window before the player sees the next round.
+    const first = await forwardSigned(body, timeout);
+    if (first.status !== 502 && first.status !== 504) return first;
+    return forwardSigned(body, timeout);
+  }
   return forwardSigned(body, timeout);
 }

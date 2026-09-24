@@ -1,6 +1,16 @@
 # Production test evidence
 
-## Current release: eight active players, twelve rounds
+## Current release: 50-seat lobby
+
+- Date: 2026-09-24
+- [Live app](https://find-the-landmark.vercel.app/)
+- [StudioNet contract](https://explorer-studio.genlayer.com/address/0x219f4011bB42BEf4BEbb5aF46dfe69F7bE2eDd5c) (`find-the-landmark.lobby-game.v4.4`)
+- Room `Q6582Y`: 50 distinct signed-player sessions admitted; player 51 was rejected as full.
+- The one-machine 50-answer load run could not complete: StudioNet rejected `eth_sendRawTransaction` with `Rate limit exceeded: 30 requests per minute`. This is **not** evidence that 50 separate devices can or cannot finish a match.
+- Room `96VW37`: retrying create/join preserved the same room and player token, concurrent duplicate joins did not add a second player, and a different token could not take over the session.
+- Build, lint, contract lint, direct contract tests, and StudioNet deployment policy test passed. A completed 50-active-player match is **not yet verified**.
+
+## Completed eight-player match, twelve rounds
 
 - Date: 2026-09-24
 - [Completed match and round-by-round sources](https://find-the-landmark.vercel.app/?results=K82K7A)
@@ -30,7 +40,7 @@
 
 ## Historical roster test
 
-The following is historical evidence of a 50-person roster, **not** 50 simultaneous answerers. Only eight players answered per round. Current lobbies are capped at eight until higher full-participation capacity is measured.
+The following is historical evidence of a 50-person roster, **not** 50 simultaneous answerers. Only eight players answered per round. Current lobbies have 50 seats; full-participation capacity still needs a completed test.
 
 - Date: 2026-08-21
 - App: https://find-the-landmark.vercel.app/

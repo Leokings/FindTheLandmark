@@ -21,6 +21,7 @@ import {
 
 const SESSION_KEY = "find-the-landmark.tab-session.v3";
 const LEGACY_SESSION_KEY = "find-the-landmark.lobby.v2";
+const PENDING_ENTRY_KEY = "find-the-landmark.pending-entry.v1";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 const realtimeClient = SUPABASE_URL && SUPABASE_KEY
@@ -34,6 +35,16 @@ type GameStatus = "waiting" | "registering" | "running" | "verifying" | "finishe
 type Session = {
   code: string;
   displayName: string;
+  playerId: string;
+  playerToken: string;
+  signer: GameSigner;
+};
+
+type PendingEntry = {
+  action: "create" | "join";
+  code: string;
+  displayName: string;
+  pack: GameState["pack"];
   playerId: string;
   playerToken: string;
   signer: GameSigner;
@@ -106,6 +117,7 @@ type GameState = {
 };
 
 type GameResponse = GameState & { playerToken?: string; error?: string };
+type EntryResponse = { code: string; playerToken: string; error?: string };
 type AnswerResponse = { accepted: true; roundId: string; selectedIndex: number; error?: string };
 
 class GameRequestError extends Error {
@@ -166,6 +178,46 @@ async function gameRequest<T extends { error?: string } = GameResponse>(
 function saveSession(session: Session | null) {
   if (session) sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
   else sessionStorage.removeItem(SESSION_KEY);
+}
+
+function pendingEntry(): PendingEntry | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const value = JSON.parse(sessionStorage.getItem(PENDING_ENTRY_KEY) ?? "null") as Partial<PendingEntry> | null;
+    if (
+      value
+      && (value.action === "create" || value.action === "join")
+      && typeof value.code === "string"
+      && typeof value.displayName === "string"
+      && (value.pack === "mixed" || value.pack === "landmarks" || value.pack === "genlayer")
+      && typeof value.playerId === "string"
+      && /^[a-f0-9]{64}$/.test(value.playerToken ?? "")
+    ) {
+      const signer = restoreGameSigner(value.signer);
+      if (signer) return { ...value, signer } as PendingEntry;
+    }
+  } catch { /* A damaged pending attempt should never block entry. */ }
+  sessionStorage.removeItem(PENDING_ENTRY_KEY);
+  return null;
+}
+
+function newPlayerToken() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function entryRequest(payload: Record<string, unknown>): Promise<EntryResponse> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await gameRequest<EntryResponse>(payload);
+    } catch (error) {
+      const transient = error instanceof GameRequestError
+        ? [502, 503, 504].includes(error.status)
+        : error instanceof TypeError;
+      if (!transient || attempt === 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+    }
+  }
+  throw new Error("Could not enter the lobby.");
 }
 
 function sessionPayload(session: Session) {
@@ -268,6 +320,7 @@ export default function Home() {
 
   const leaveGame = useCallback(() => {
     saveSession(null);
+    sessionStorage.removeItem(PENDING_ENTRY_KEY);
     if (typeof window !== "undefined" && window.location.search) window.history.replaceState({}, "", window.location.pathname);
     setSession(null);
     setGame(null);
@@ -327,9 +380,16 @@ export default function Home() {
 
   useEffect(() => {
     if (!session || game) return;
+    let active = true;
     const controller = new AbortController();
-    const timer = window.setTimeout(() => void refresh(session, controller.signal), 0);
+    let timer = 0;
+    const poll = async () => {
+      await refresh(session, controller.signal);
+      if (active) timer = window.setTimeout(poll, 5_000);
+    };
+    timer = window.setTimeout(poll, 0);
     return () => {
+      active = false;
       window.clearTimeout(timer);
       controller.abort();
     };
@@ -482,26 +542,44 @@ export default function Home() {
   }, [game?.currentRound?.endsAt, now]);
 
   const createOrJoin = async (action: "create" | "join", name: string, code?: string, gamePack: GameState["pack"] = "mixed") => {
-    const id = playerId();
-    const signer = createGameSigner();
-    const response = await gameRequest({
+    const normalizedCode = action === "join" ? (code ?? "").trim().toUpperCase() : "";
+    const previous = pendingEntry();
+    const attempt: PendingEntry = previous
+      && previous.action === action
+      && previous.code === normalizedCode
+      && previous.displayName === name
+      && previous.pack === gamePack
+      ? previous
+      : {
+        action,
+        code: normalizedCode,
+        displayName: name,
+        pack: gamePack,
+        playerId: playerId(),
+        playerToken: newPlayerToken(),
+        signer: createGameSigner(),
+      };
+    sessionStorage.setItem(PENDING_ENTRY_KEY, JSON.stringify(attempt));
+    const response = await entryRequest({
       action,
-      playerId: id,
+      playerId: attempt.playerId,
+      playerToken: attempt.playerToken,
       displayName: name,
-      signerAddress: signer.address,
-      ...(action === "join" ? { code } : { pack: gamePack }),
+      signerAddress: attempt.signer.address,
+      ...(action === "join" ? { code: normalizedCode } : { pack: gamePack }),
     });
     if (!response.playerToken) throw new Error("Lobby token missing.");
     const nextSession = {
       code: response.code,
       displayName: name,
-      playerId: id,
+      playerId: attempt.playerId,
       playerToken: response.playerToken,
-      signer,
+      signer: attempt.signer,
     };
     saveSession(nextSession);
+    sessionStorage.removeItem(PENDING_ENTRY_KEY);
     setSession(nextSession);
-    setGame(response);
+    setGame(null);
     return response;
   };
 
@@ -665,6 +743,10 @@ export default function Home() {
     }
   };
 
+  if (session && !game) {
+    return <main className="home-shell" id="top"><section className="entry-panel"><p role="status">ENTERING ROOM {session.code}…</p>{error && <p className="form-error" role="alert">{error}</p>}<button type="button" className="primary-action" onClick={() => void refresh(session)}>TRY AGAIN <i>↗</i></button><button type="button" className="text-action" onClick={leaveGame}>EXIT</button></section></main>;
+  }
+
   if (!game) {
     return (
       <main className="home-shell" id="top">
@@ -677,10 +759,10 @@ export default function Home() {
         </header>
 
         <section className="home-title">
-          <p>LOBBY GAME · 8 MAX</p>
+          <p>LOBBY GAME · 50 MAX</p>
           <h1>TEST<br />YOUR<br /><em>METTLE.</em></h1>
           <div className="home-stats" aria-label="Game format">
-            <span><b>8</b> PLAYERS</span>
+            <span><b>50</b> PLAYERS</span>
             <span><b>12</b> ROUNDS</span>
             <span><b>00</b> START XP</span>
           </div>
@@ -882,7 +964,7 @@ export default function Home() {
           {error && <p className="form-error" role="alert">{error}</p>}
           <RoundResults rounds={game.roundRecap} />
         </section>
-        <Board entries={game.leaderboard.slice(0, 8)} />
+        <Board entries={game.leaderboard} />
       </div>
     </main>
   );

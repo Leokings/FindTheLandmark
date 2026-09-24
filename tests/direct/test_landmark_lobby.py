@@ -161,8 +161,8 @@ def test_policy_uses_signed_commits_and_transaction_time(direct_vm, direct_deplo
     contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
     policy = contract.get_policy()
 
-    assert policy["policy_version"] == "find-the-landmark.lobby-game.v4.3"
-    assert policy["max_players"] == 8
+    assert policy["policy_version"] == "find-the-landmark.lobby-game.v4.4"
+    assert policy["max_players"] == 50
     assert policy["start_delay_ms"] == 180_000
     assert policy["answer_authentication"] == "direct_eoa_commitment"
     assert policy["timing_source"] == "genlayer_transaction_timestamp"
@@ -401,13 +401,13 @@ def test_quiz_is_fetched_from_authoritative_source_by_leader_and_validator(
     assert direct_vm.run_validator() is True
 
 
-def test_eight_signed_players_can_commit_reveal_and_score_once(
+def test_fifty_signed_players_can_commit_reveal_and_score_once(
     direct_vm, direct_deploy, direct_alice
 ):
     contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
     from genlayer.py.types import Address
 
-    players = [Address(f"0x{index + 1:040x}") for index in range(8)]
+    players = [Address(f"0x{index + 1:040x}") for index in range(50)]
     register(contract, players)
     reveals = []
     for index, player in enumerate(players):
@@ -422,6 +422,19 @@ def test_eight_signed_players_can_commit_reveal_and_score_once(
     direct_vm.warp("2026-08-21T10:05:21Z")
     result = contract.finalize_round("game-one", 0)
 
-    assert len(result["scores"]) == 8
+    assert len(result["scores"]) == 50
     assert all(row["awarded_xp"] == 137 for row in result["scores"])
-    assert len(contract.get_leaderboard("game-one")) == 8
+    assert len(contract.get_leaderboard("game-one")) == 50
+
+
+def test_fifty_first_player_is_rejected(direct_vm, direct_deploy, direct_alice):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
+    from genlayer.py.types import Address
+
+    players = [Address(f"0x{index + 1:040x}") for index in range(51)]
+    with direct_vm.expect_revert("Roster must contain 2 to 50 players"):
+        contract.register_game(
+            "game-one",
+            json.dumps([address_text(player) for player in players]),
+            json.dumps(PLAN),
+        )
