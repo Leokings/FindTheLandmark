@@ -17,6 +17,7 @@ type GameBody = {
   playerId?: unknown;
   playerToken?: unknown;
   signerAddress?: unknown;
+  pack?: unknown;
   choiceIndex?: unknown;
   roundIndex?: unknown;
   commitment?: unknown;
@@ -131,6 +132,13 @@ export async function POST(request: Request) {
     }
     body.displayName = displayName;
     body.signerAddress = signerAddress;
+  }
+  if (input.action === "create") {
+    const pack = input.pack ?? "mixed";
+    if (pack !== "mixed" && pack !== "landmarks" && pack !== "genlayer") {
+      return json({ error: "Choose a game pack." }, 400);
+    }
+    body.pack = pack;
   }
   if (input.action !== "create") {
     const code = typeof input.code === "string" ? input.code.trim().toUpperCase() : "";

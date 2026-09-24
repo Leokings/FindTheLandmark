@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   metadataBase: new URL("https://find-the-landmark.vercel.app"),
   title: "Find the Landmark — Multiplayer map game",
-  description: "Create a lobby and race up to 50 players through shared landmark rounds settled by GenLayer.",
+  description: "Create an eight-player lobby and race through landmark and GenLayer Docs rounds settled by GenLayer.",
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
   openGraph: {
     title: "Find the Landmark",

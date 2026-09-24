@@ -1,5 +1,7 @@
 # Production test evidence
 
+This is historical evidence of a 50-person roster, not 50 simultaneous answerers. Only 8 players answered per round. New lobbies are capped at 8 until a higher full-participation capacity is measured.
+
 - Date: 2026-08-21
 - App: https://find-the-landmark.vercel.app/
 - StudioNet contract: `0x0c8e2c3a10003654F76C9736391fa245F120672d`

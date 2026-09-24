@@ -7,6 +7,7 @@ import {
   answerState,
   commitSignedAnswer,
   createGameSigner,
+  hydratePendingAnswers,
   markPendingBackendSaved,
   markPendingReveal,
   pendingAnswers,
@@ -18,7 +19,8 @@ import {
   type PendingAnswer,
 } from "@/lib/genlayer-session";
 
-const SESSION_KEY = "find-the-landmark.lobby.v2";
+const SESSION_KEY = "find-the-landmark.tab-session.v3";
+const LEGACY_SESSION_KEY = "find-the-landmark.lobby.v2";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 const realtimeClient = SUPABASE_URL && SUPABASE_KEY
@@ -55,14 +57,27 @@ type RoundState = {
   options: string[];
   image: string | null;
   credit: string | null;
-  creditUrl: string | null;
-  sourceLabel: string | null;
-  sourceUrl: string | null;
+  category: "picture" | "atlas" | "genlayer";
   startedAt: string;
   endsAt: string;
   revealFallbackAt: string;
   revealDeadline: string;
   selectedIndex: number | null;
+};
+
+type RoundRecap = {
+  position: number;
+  kind: "identify" | "quiz";
+  question: string;
+  options: string[];
+  correctIndex: number;
+  correctAnswer: string;
+  sourceLabel: string | null;
+  sourceUrl: string | null;
+  creditUrl: string | null;
+  choiceIndex: number | null;
+  verdict: "right" | "wrong" | "not_counted" | null;
+  awardedXp: number;
 };
 
 type GameState = {
@@ -71,12 +86,14 @@ type GameState = {
   status: GameStatus;
   isHost: boolean;
   maxPlayers: number;
+  pack: "mixed" | "landmarks" | "genlayer";
   playerCount: number;
   roundCount: number;
   currentRoundIndex: number;
   settledRounds: number;
   pendingRounds: number;
   lastResult: { position: number; verdict: "right" | "wrong" | "not_counted"; awardedXp: number } | null;
+  roundRecap: RoundRecap[];
   currentRound: RoundState | null;
   leaderboard: LeaderboardEntry[];
   winner: LeaderboardEntry | null;
@@ -101,7 +118,9 @@ class GameRequestError extends Error {
 function storedSession(): Session | null {
   if (typeof window === "undefined") return null;
   try {
-    const value = JSON.parse(localStorage.getItem(SESSION_KEY) ?? "null") as Partial<Session> | null;
+    const stored = sessionStorage.getItem(SESSION_KEY);
+    const legacy = stored ? null : localStorage.getItem(LEGACY_SESSION_KEY);
+    const value = JSON.parse(stored ?? legacy ?? "null") as Partial<Session> | null;
     if (
       value
       && typeof value.code === "string"
@@ -110,10 +129,18 @@ function storedSession(): Session | null {
       && typeof value.playerToken === "string"
     ) {
       const signer = restoreGameSigner(value.signer);
-      if (signer) return { ...value, signer } as Session;
+      if (signer) {
+        const session = { ...value, signer } as Session;
+        if (legacy) {
+          sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+          localStorage.removeItem(LEGACY_SESSION_KEY);
+        }
+        return session;
+      }
     }
   } catch {
-    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(LEGACY_SESSION_KEY);
   }
   return null;
 }
@@ -135,8 +162,8 @@ async function gameRequest<T extends { error?: string } = GameResponse>(
 }
 
 function saveSession(session: Session | null) {
-  if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  else localStorage.removeItem(SESSION_KEY);
+  if (session) sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  else sessionStorage.removeItem(SESSION_KEY);
 }
 
 function sessionPayload(session: Session) {
@@ -189,6 +216,25 @@ function LastResult({ result }: { result: NonNullable<GameState["lastResult"]> }
   );
 }
 
+function RoundResults({ rounds }: { rounds: RoundRecap[] }) {
+  if (!rounds.length) return null;
+  return (
+    <details className="round-results">
+      <summary>ROUND RESULTS <span>{rounds.length}</span></summary>
+      <ol>
+        {[...rounds].reverse().map((round) => (
+          <li key={round.position}>
+            <div><b>{String(round.position + 1).padStart(2, "0")}</b><strong>{round.question}</strong><span>{round.verdict === "right" ? `+${round.awardedXp} XP` : round.verdict === "wrong" ? "WRONG" : round.verdict === "not_counted" ? "NO ANSWER" : ""}</span></div>
+            <p>ANSWER · {round.correctAnswer}</p>
+            {round.sourceUrl && <a href={round.sourceUrl} target="_blank" rel="noreferrer">{round.sourceLabel ?? "CHECK SOURCE"} ↗</a>}
+            {!round.sourceUrl && round.creditUrl && <a href={round.creditUrl} target="_blank" rel="noreferrer">PHOTO CREDIT ↗</a>}
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
 function GameHeader({ code, onExit }: { code: string; onExit: () => void }) {
   return (
     <header className="game-header">
@@ -204,6 +250,7 @@ function GameHeader({ code, onExit }: { code: string; onExit: () => void }) {
 
 export default function Home() {
   const [mode, setMode] = useState<"create" | "join" | "results">("create");
+  const [pack, setPack] = useState<GameState["pack"]>("mixed");
   const [displayName, setDisplayName] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [session, setSession] = useState<Session | null>(storedSession);
@@ -218,6 +265,7 @@ export default function Home() {
 
   const leaveGame = useCallback(() => {
     saveSession(null);
+    if (typeof window !== "undefined" && window.location.search) window.history.replaceState({}, "", window.location.pathname);
     setSession(null);
     setGame(null);
     setError("");
@@ -253,6 +301,25 @@ export default function Home() {
       setError(caught instanceof Error ? caught.message : "Results unavailable.");
     }
   }, []);
+
+  useEffect(() => {
+    if (session) return;
+    const params = new URLSearchParams(window.location.search);
+    const resultCode = params.get("results")?.trim().toUpperCase();
+    const roomCode = params.get("room")?.trim().toUpperCase();
+    const timer = window.setTimeout(() => {
+      if (resultCode && /^[A-Z2-9]{6}$/.test(resultCode)) {
+        setMode("results");
+        setJoinCode(resultCode);
+        setViewedResultsCode(resultCode);
+        void refreshResults(resultCode);
+      } else if (roomCode && /^[A-Z2-9]{6}$/.test(roomCode)) {
+        setMode("join");
+        setJoinCode(roomCode);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [refreshResults, session]);
 
   useEffect(() => {
     if (!session || game) return;
@@ -343,9 +410,10 @@ export default function Home() {
       try {
         const signer = restoreGameSigner(session.signer);
         if (!signer) return;
-        const gameAnswers = pendingAnswers().filter((answer) => (
+        const gameAnswers = (await hydratePendingAnswers(signer)).filter((answer) => (
           answer.contractGameId === game.contractGameId
           && answer.contractAddress.toLowerCase() === game.contractAddress?.toLowerCase()
+          && answer.signerAddress.toLowerCase() === signer.address.toLowerCase()
         ));
         for (const stored of gameAnswers) {
           if (!active) return;
@@ -355,6 +423,9 @@ export default function Home() {
               await gameRequest<AnswerResponse>(pendingAnswerPayload(session, answer));
               markPendingBackendSaved(answer);
               answer = { ...answer, backendSaved: true };
+              setGame((current) => current?.currentRound?.position === answer.roundIndex
+                ? { ...current, currentRound: { ...current.currentRound, selectedIndex: answer.choiceIndex } }
+                : current);
             } catch {
               continue;
             }
@@ -399,9 +470,33 @@ export default function Home() {
   }, [game?.contractAddress, game?.contractGameId, game?.contractVersion, game?.status, session]);
 
   const secondsLeft = useMemo(() => {
-    if (!game?.currentRound?.endsAt) return 0;
+    if (!game?.currentRound?.endsAt || !now) return 0;
     return Math.max(0, Math.ceil((Date.parse(game.currentRound.endsAt) - now) / 1_000));
   }, [game?.currentRound?.endsAt, now]);
+
+  const createOrJoin = async (action: "create" | "join", name: string, code?: string, gamePack: GameState["pack"] = "mixed") => {
+    const id = playerId();
+    const signer = createGameSigner();
+    const response = await gameRequest({
+      action,
+      playerId: id,
+      displayName: name,
+      signerAddress: signer.address,
+      ...(action === "join" ? { code } : { pack: gamePack }),
+    });
+    if (!response.playerToken) throw new Error("Lobby token missing.");
+    const nextSession = {
+      code: response.code,
+      displayName: name,
+      playerId: id,
+      playerToken: response.playerToken,
+      signer,
+    };
+    saveSession(nextSession);
+    setSession(nextSession);
+    setGame(response);
+    return response;
+  };
 
   const enterLobby = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -432,26 +527,7 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      const id = playerId();
-      const signer = createGameSigner();
-      const response = await gameRequest({
-        action: mode,
-        playerId: id,
-        displayName: name,
-        signerAddress: signer.address,
-        ...(mode === "join" ? { code: joinCode } : {}),
-      });
-      if (!response.playerToken) throw new Error("Lobby token missing.");
-      const nextSession = {
-        code: response.code,
-        displayName: name,
-        playerId: id,
-        playerToken: response.playerToken,
-        signer,
-      };
-      saveSession(nextSession);
-      setSession(nextSession);
-      setGame(response);
+      await createOrJoin(mode, name, joinCode, pack);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not enter lobby.");
     } finally {
@@ -484,9 +560,10 @@ export default function Home() {
         || !game.contractAddress
         || !/^0x[a-fA-F0-9]{40}$/.test(game.contractAddress)
       ) throw new Error("Round unavailable.");
-      const existing = pendingAnswers().find((entry) => (
+      const existing = (await hydratePendingAnswers(session.signer)).find((entry) => (
         entry.contractGameId === game.contractGameId
         && entry.roundIndex === game.currentRound?.position
+        && entry.signerAddress.toLowerCase() === session.signer.address.toLowerCase()
       ));
       let pending: PendingAnswer;
       if (existing) {
@@ -501,6 +578,7 @@ export default function Home() {
           choiceIndex,
         });
         pending = {
+          signerAddress: session.signer.address,
           contractAddress: game.contractAddress as `0x${string}`,
           contractGameId: game.contractGameId,
           roundIndex: game.currentRound.position,
@@ -520,13 +598,10 @@ export default function Home() {
         : current);
     } catch (caught) {
       const locked = game.contractGameId
-        ? pendingAnswers().some((entry) => entry.contractGameId === game.contractGameId && entry.roundIndex === game.currentRound?.position)
+        ? pendingAnswers(session.signer.address).some((entry) => entry.contractGameId === game.contractGameId && entry.roundIndex === game.currentRound?.position)
         : false;
       if (locked) {
-        setGame((current) => current?.currentRound
-          ? { ...current, currentRound: { ...current.currentRound, selectedIndex: choiceIndex } }
-          : current);
-        setError("Answer locked. Syncing.");
+        setError("Commit sent. Checking answer receipt.");
       } else {
         setError(caught instanceof Error ? caught.message : "Answer not saved.");
       }
@@ -542,6 +617,29 @@ export default function Home() {
     window.setTimeout(() => setCopied(false), 1_500);
   };
 
+  const copyLink = async (type: "room" | "results") => {
+    if (!game) return;
+    const url = new URL(window.location.origin);
+    url.searchParams.set(type, game.code);
+    await navigator.clipboard.writeText(url.toString());
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1_500);
+  };
+
+  const rematch = async () => {
+    if (!game || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await createOrJoin("create", session?.displayName ?? (displayName.trim() || "Explorer"), undefined, game.pack);
+      setViewedResultsCode("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not make a rematch.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!game) {
     return (
       <main className="home-shell" id="top">
@@ -554,10 +652,10 @@ export default function Home() {
         </header>
 
         <section className="home-title">
-          <p>LOBBY GAME · 50 MAX</p>
+          <p>LOBBY GAME · 8 MAX</p>
           <h1>TEST<br />YOUR<br /><em>METTLE.</em></h1>
           <div className="home-stats" aria-label="Game format">
-            <span><b>50</b> PLAYERS</span>
+            <span><b>8</b> PLAYERS</span>
             <span><b>12</b> ROUNDS</span>
             <span><b>00</b> START XP</span>
           </div>
@@ -582,6 +680,18 @@ export default function Home() {
                 <input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 6))} maxLength={6} placeholder="MAP123" autoCapitalize="characters" autoComplete="off" />
               </label>
             )}
+            {mode === "create" && (
+              <fieldset className="pack-picker">
+                <legend>GAME PACK</legend>
+                {([
+                  ["mixed", "WORLD TOUR"],
+                  ["landmarks", "LANDMARKS"],
+                  ["genlayer", "GENLAYER LAB"],
+                ] as const).map(([value, label]) => (
+                  <button key={value} type="button" aria-pressed={pack === value} className={pack === value ? "active" : ""} onClick={() => setPack(value)}>{label}</button>
+                ))}
+              </fieldset>
+            )}
             {error && <p className="form-error" role="alert">{error}</p>}
             <button className="primary-action" type="submit" disabled={busy}>{busy ? "WAIT…" : mode === "create" ? "MAKE LOBBY" : mode === "join" ? "ENTER ROOM" : "VIEW RESULTS"}<i>↗</i></button>
             {mode !== "results" ? <p className="connection-notice">PLEASE STAY CONNECTED UNTIL THE GAME ENDS</p> : null}
@@ -601,6 +711,7 @@ export default function Home() {
             <span>ROOM CODE</span>
             <button type="button" className="room-code" onClick={copyCode}>{game.code}</button>
             <p>{copied ? "COPIED" : "TAP TO COPY"}</p>
+            <button type="button" className="text-action invite-action" onClick={() => void copyLink("room")}>{copied ? "LINK COPIED" : "COPY INVITE LINK ↗"}</button>
             <b>{game.playerCount}/{game.maxPlayers} IN</b>
             {game.isHost ? (
               <button type="button" className="primary-action start-action" onClick={startGame} disabled={busy || game.playerCount < 2}>{busy ? "STARTING…" : game.playerCount < 2 ? "NEED 2 PLAYERS" : "START GAME"}<i>→</i></button>
@@ -631,12 +742,13 @@ export default function Home() {
         <GameHeader code={game.code} onExit={leaveGame} />
         <section className="status-poster">
           <span>{sealing ? `${game.settledRounds}/${game.roundCount}` : `00/${String(game.roundCount).padStart(2, "0")}`}</span>
-          <h1>{sealing ? "SEALING\nSCORES" : "MAKING\nTHE BOARD"}</h1>
+          <h1>{sealing ? "CHECKING\nANSWERS" : "MAKING\nTHE BOARD"}</h1>
           <div className="status-loader"><i /></div>
           {game.lastResult && <LastResult result={game.lastResult} />}
+          {sealing && <p className="status-tip">VERIFYING {game.settledRounds} OF {game.roundCount} ROUNDS</p>}
           {!sealing ? <p className="status-tip">TIP · PLEASE STAY CONNECTED UNTIL THE GAME ENDS</p> : null}
         </section>
-        <Board entries={game.leaderboard} />
+        <div className="status-details"><Board entries={game.leaderboard} /><RoundResults rounds={game.roundRecap} /></div>
         {error && <p className="floating-error" role="alert">{error}</p>}
       </main>
     );
@@ -665,14 +777,23 @@ export default function Home() {
           <h1>{game.winner?.displayName || "TIE GAME"}</h1>
           <strong>{game.winner?.score ?? 0} XP</strong>
           {game.lastResult && <LastResult result={game.lastResult} />}
-          <button type="button" className="primary-action" onClick={leaveGame}>NEW LOBBY<i>↗</i></button>
+          <div className="result-actions">
+            <button type="button" className="primary-action" onClick={() => void rematch()} disabled={busy}>{busy ? "MAKING LOBBY…" : "REMATCH"}<i>↗</i></button>
+            <button type="button" className="text-action" onClick={() => void copyLink("results")}>{copied ? "LINK COPIED" : "SHARE RESULTS ↗"}</button>
+            <button type="button" className="text-action" onClick={leaveGame}>NEW GAME</button>
+          </div>
+          {error && <p className="form-error" role="alert">{error}</p>}
         </section>
-        <Board entries={game.leaderboard} full />
+        <div className="result-details"><Board entries={game.leaderboard} full /><RoundResults rounds={game.roundRecap} /></div>
       </main>
     );
   }
 
   const round = game.currentRound;
+  const pendingChoice = session && round && game.contractGameId
+    ? pendingAnswers(session.signer.address).find((entry) => entry.contractGameId === game.contractGameId && entry.roundIndex === round.position)?.choiceIndex ?? null
+    : null;
+  const secondsUntilStart = round && now ? Math.max(0, Math.ceil((Date.parse(round.startedAt) - now) / 1_000)) : 0;
   const you = game.leaderboard.find((entry) => entry.isYou);
   const duration = round ? Math.max(1, Date.parse(round.endsAt) - Date.parse(round.startedAt)) : 1;
   const timerPercent = round ? Math.max(0, Math.min(100, ((Date.parse(round.endsAt) - now) / duration) * 100)) : 0;
@@ -688,7 +809,7 @@ export default function Home() {
       <GameHeader code={game.code} onExit={leaveGame} />
       <div className="round-strip">
         <span>ROUND {String(game.currentRoundIndex + 1).padStart(2, "0")}/{String(game.roundCount).padStart(2, "0")}</span>
-        <b>{round?.sourceLabel?.startsWith("GenLayer") ? "GENLAYER DOCS" : round?.kind === "quiz" ? "ATLAS QUIZ" : "QUICK PICK"}</b>
+        <b>{round?.category === "genlayer" ? "GENLAYER DOCS" : round?.category === "atlas" ? "ATLAS QUIZ" : "QUICK PICK"}</b>
         <strong>{you?.score ?? 0} XP</strong>
       </div>
       <div className="round-layout">
@@ -697,37 +818,36 @@ export default function Home() {
             <figure>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={round.image} alt="Landmark to identify" />
-              {round.creditUrl && <figcaption><a href={round.creditUrl} target="_blank" rel="noreferrer">{round.credit}</a></figcaption>}
+              {round.credit && <figcaption>{round.credit}</figcaption>}
             </figure>
           ) : (
             <div className="quiz-mark" aria-hidden="true">?</div>
           )}
           <div className="challenge-copy">
-            {round?.sourceUrl && (
-              <a className="round-source" href={round.sourceUrl} target="_blank" rel="noreferrer">
-                SOURCE · {round.sourceLabel ?? "GENLAYER DOCS"} ↗
-              </a>
-            )}
+            {round?.category !== "picture" && <span className="round-source">SOURCE VERIFIED AFTER ROUND</span>}
             <h1 className={questionSize}>{round?.question}</h1>
           </div>
         </section>
         <section className="answer-panel">
           <div className="timer-row">
-            <span>TIME</span><b>{String(secondsLeft).padStart(2, "0")}</b>
+            <span>{secondsUntilStart ? "STARTS IN" : "TIME"}</span><b>{String(secondsUntilStart || secondsLeft).padStart(2, "0")}</b>
             <i><em style={{ width: `${timerPercent}%` }} /></i>
           </div>
           <div className="answers">
             {round?.options.map((option, index) => {
-              const selected = round.selectedIndex === index || answering === index;
+              const selected = round.selectedIndex === index || answering === index || pendingChoice === index;
               return (
-                <button key={option} type="button" className={selected ? "selected" : ""} disabled={round.selectedIndex !== null || answering !== null || secondsLeft === 0} onClick={() => answer(index)}>
-                  <span>{String.fromCharCode(65 + index)}</span><b>{option}</b><i>{selected ? "LOCKED" : "→"}</i>
+                <button key={option} type="button" className={selected ? "selected" : ""} disabled={round.selectedIndex !== null || answering !== null || secondsLeft === 0 || secondsUntilStart > 0 || (pendingChoice !== null && pendingChoice !== index)} onClick={() => answer(index)}>
+                  <span>{String.fromCharCode(65 + index)}</span><b>{option}</b><i>{answering === index ? "SENDING" : round.selectedIndex === index ? "RECEIVED" : pendingChoice === index ? "SYNCING" : "→"}</i>
                 </button>
               );
             })}
           </div>
+          {round?.selectedIndex === null && pendingChoice !== null && <p className="answer-received" role="status">ANSWER SENT · CONFIRMING RECEIPT</p>}
+          {round?.selectedIndex !== null && round?.selectedIndex !== undefined && <p className="answer-received" role="status">ANSWER RECEIVED · RESULT AFTER ROUND</p>}
           {game.lastResult && <LastResult result={game.lastResult} />}
           {error && <p className="form-error" role="alert">{error}</p>}
+          <RoundResults rounds={game.roundRecap} />
         </section>
         <Board entries={game.leaderboard.slice(0, 8)} />
       </div>

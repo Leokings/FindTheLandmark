@@ -2,7 +2,8 @@ import { bytesToHex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 const STUDIO_ENDPOINT = "https://studio.genlayer.com/api";
-const PENDING_KEY = "find-the-landmark.pending-answers.v4";
+const LEGACY_PENDING_KEY = "find-the-landmark.pending-answers.v4";
+const PENDING_KEY_PREFIX = "find-the-landmark.pending-answers.v5:";
 
 export type GameSigner = {
   address: `0x${string}`;
@@ -10,6 +11,7 @@ export type GameSigner = {
 };
 
 export type PendingAnswer = {
+  signerAddress: `0x${string}`;
   contractAddress: `0x${string}`;
   contractGameId: string;
   roundIndex: number;
@@ -30,6 +32,10 @@ function validPrivateKey(value: unknown): value is `0x${string}` {
 
 function pendingId(answer: Pick<PendingAnswer, "contractGameId" | "roundIndex">) {
   return `${answer.contractGameId}:${answer.roundIndex}`;
+}
+
+function signerKey(address: string) {
+  return `${PENDING_KEY_PREFIX}${address.toLowerCase()}`;
 }
 
 async function sha256Hex(value: string) {
@@ -186,15 +192,17 @@ export async function answerState(input: {
   }) as Promise<{ committed: boolean; revealed: boolean }>;
 }
 
-export function pendingAnswers(): PendingAnswer[] {
+export function pendingAnswers(signerAddress: string): PendingAnswer[] {
   if (typeof window === "undefined") return [];
   try {
-    const parsed = JSON.parse(localStorage.getItem(PENDING_KEY) ?? "[]") as unknown;
+    const parsed = JSON.parse(localStorage.getItem(signerKey(signerAddress)) ?? "[]") as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((entry): entry is PendingAnswer => {
       if (!entry || typeof entry !== "object") return false;
       const row = entry as Partial<PendingAnswer>;
-      return typeof row.contractGameId === "string"
+      return typeof row.signerAddress === "string"
+        && row.signerAddress.toLowerCase() === signerAddress.toLowerCase()
+        && typeof row.contractGameId === "string"
         && typeof row.contractAddress === "string"
         && /^0x[a-f0-9]{40}$/i.test(row.contractAddress)
         && Number.isInteger(row.roundIndex)
@@ -208,19 +216,61 @@ export function pendingAnswers(): PendingAnswer[] {
         && typeof row.revealDeadlineMs === "number";
     });
   } catch {
-    localStorage.removeItem(PENDING_KEY);
+    localStorage.removeItem(signerKey(signerAddress));
     return [];
   }
 }
 
+// Older builds stored all players' answers under one key. Recover only entries
+// whose commitment can be reproduced by this tab's signer; never claim another
+// player's locked answer as our own.
+export async function hydratePendingAnswers(signer: GameSigner): Promise<PendingAnswer[]> {
+  if (typeof window === "undefined") return [];
+  let legacy: unknown;
+  try {
+    legacy = JSON.parse(localStorage.getItem(LEGACY_PENDING_KEY) ?? "[]");
+  } catch {
+    legacy = [];
+  }
+  if (Array.isArray(legacy)) {
+    const remaining: unknown[] = [];
+    for (const value of legacy) {
+      if (!value || typeof value !== "object") continue;
+      const row = value as Partial<PendingAnswer>;
+      if (
+        typeof row.contractGameId !== "string"
+        || !Number.isInteger(row.roundIndex)
+        || !Number.isInteger(row.choiceIndex)
+        || typeof row.salt !== "string"
+        || typeof row.commitment !== "string"
+      ) continue;
+      const expected = await createCommitment({
+        gameId: row.contractGameId,
+        roundIndex: row.roundIndex as number,
+        playerAddress: signer.address,
+        choiceIndex: row.choiceIndex as number,
+        salt: row.salt,
+      });
+      if (expected !== row.commitment) {
+        remaining.push(value);
+        continue;
+      }
+      savePendingAnswer({ ...row, signerAddress: signer.address } as PendingAnswer);
+    }
+    if (remaining.length) localStorage.setItem(LEGACY_PENDING_KEY, JSON.stringify(remaining));
+    else localStorage.removeItem(LEGACY_PENDING_KEY);
+  }
+  return pendingAnswers(signer.address);
+}
+
 export function savePendingAnswer(answer: PendingAnswer) {
-  const others = pendingAnswers().filter((entry) => pendingId(entry) !== pendingId(answer));
-  localStorage.setItem(PENDING_KEY, JSON.stringify([...others, answer]));
+  const others = pendingAnswers(answer.signerAddress).filter((entry) => pendingId(entry) !== pendingId(answer));
+  localStorage.setItem(signerKey(answer.signerAddress), JSON.stringify([...others, answer]));
 }
 
 export function removePendingAnswer(answer: PendingAnswer) {
-  const next = pendingAnswers().filter((entry) => pendingId(entry) !== pendingId(answer));
-  localStorage.setItem(PENDING_KEY, JSON.stringify(next));
+  const next = pendingAnswers(answer.signerAddress).filter((entry) => pendingId(entry) !== pendingId(answer));
+  localStorage.setItem(signerKey(answer.signerAddress), JSON.stringify(next));
 }
 
 export function markPendingReveal(answer: PendingAnswer, revealTxHash: string) {

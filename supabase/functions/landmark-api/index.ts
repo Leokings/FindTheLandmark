@@ -8,7 +8,8 @@ import {
 } from "npm:@imagemagick/magick-wasm@0.0.42";
 import { verifyMessage } from "npm:viem@2.55.18";
 import { needsSupplementalReveal, scheduledClockChange } from "./clock.ts";
-import { contractPlan, createGamePlan, type GameRound } from "./content.ts";
+import { contractPlan, createGamePlan, type GamePack, type GameRound } from "./content.ts";
+import { activeChallenge } from "./round-presentation.ts";
 import {
   executionFailureReason,
   hasGenuineConsensus,
@@ -52,6 +53,7 @@ type GameRow = {
   host_player_key: string;
   status: "waiting" | "registering" | "running" | "verifying" | "finished" | "error";
   max_players: number;
+  pack: GamePack;
   round_count: number;
   current_round: number;
   plan: GameRound[];
@@ -61,6 +63,7 @@ type GameRow = {
   registration_tx_hash: string | null;
   winner_player_id: string | null;
   next_check_at: string | null;
+  worker_next_at: string | null;
   error_message: string | null;
   created_at: string;
   started_at: string | null;
@@ -200,6 +203,10 @@ function normalizeName(value: unknown) {
   if (typeof value !== "string") return null;
   const name = value.replace(/\p{Cc}/gu, "").replace(/\s+/g, " ").trim();
   return name.length >= 1 && name.length <= 24 ? name : null;
+}
+
+function normalizePack(value: unknown): GamePack | null {
+  return value === "mixed" || value === "landmarks" || value === "genlayer" ? value : null;
 }
 
 function normalizeCode(value: unknown) {
@@ -790,6 +797,37 @@ async function progressGame(db: DatabaseClient, originalGame: GameRow) {
   await submitDueFinalization(db, game, writeClient);
 }
 
+async function tickGames(db: DatabaseClient) {
+  const now = new Date().toISOString();
+  const { data: due, error } = await db.from("landmark_games")
+    .select("*")
+    .in("status", ["registering", "running", "verifying"])
+    .or(`worker_next_at.is.null,worker_next_at.lte.${now}`)
+    .order("worker_next_at", { ascending: true, nullsFirst: true })
+    .limit(3);
+  if (error) throw error;
+  let progressed = 0;
+  for (const candidate of (due ?? []) as GameRow[]) {
+    // Claim a game before making any GenLayer calls. A browser refresh and a
+    // second cron invocation can still race safely with the per-round CAS.
+    const { data: claimed, error: claimError } = await db.from("landmark_games")
+      .update({ worker_next_at: new Date(Date.now() + 25_000).toISOString() })
+      .eq("id", candidate.id)
+      .or(`worker_next_at.is.null,worker_next_at.lte.${now}`)
+      .select("*")
+      .maybeSingle();
+    if (claimError) throw claimError;
+    if (!claimed) continue;
+    try {
+      await progressGame(db, claimed as GameRow);
+      progressed += 1;
+    } catch (caught) {
+      console.error(`[landmark-tick] ${candidate.id}: ${caught instanceof Error ? caught.message : String(caught)}`);
+    }
+  }
+  return { progressed };
+}
+
 async function gameState(db: DatabaseClient, gameId: string, playerId: string | null) {
   const [{ data: game, error: gameError }, { data: players, error: playersError }, { data: rounds, error: roundsError }] = await Promise.all([
     db.from("landmark_games").select("*").eq("id", gameId).single(),
@@ -805,10 +843,11 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
 
   const { data: playerAnswers, error: answersError } = player
     ? await db.from("landmark_game_answers")
-      .select("round_id,correct,awarded_points")
+      .select("round_id,choice_index,correct,awarded_points")
       .eq("player_id", player.id)
     : { data: [], error: null };
   if (answersError) throw answersError;
+  const answerByRound = new Map((playerAnswers ?? []).map((answer) => [answer.round_id, answer]));
   const settledPositions = new Map(
     (rounds as RoundRow[])
       .filter((round) => round.status === "settled")
@@ -842,14 +881,7 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
         id: round.id,
         position: round.position,
         status: round.status,
-        kind: challenge.kind,
-        question: challenge.question,
-        options: challenge.options,
-        image: challenge.image ?? null,
-        credit: challenge.credit ?? null,
-        creditUrl: challenge.creditUrl ?? null,
-        sourceLabel: challenge.sourceLabel ?? null,
-        sourceUrl: challenge.sourceUrl ?? null,
+        ...activeChallenge(challenge),
         startedAt: round.started_at,
         endsAt: round.ends_at,
         revealFallbackAt: round.ends_at
@@ -876,6 +908,26 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
   const winner = currentGame.winner_player_id
     ? board.find((entry) => entry.id === currentGame.winner_player_id) ?? null
     : null;
+  const roundRecap = (rounds as RoundRow[])
+    .filter((round) => round.status === "settled" && round.correct_index !== null)
+    .map((round) => {
+      const challenge = currentGame.plan[round.position];
+      const answer = answerByRound.get(round.id);
+      return {
+        position: round.position,
+        kind: challenge.kind,
+        question: challenge.question,
+        options: challenge.options,
+        correctIndex: round.correct_index,
+        correctAnswer: challenge.options[round.correct_index as number],
+        sourceLabel: challenge.sourceLabel ?? null,
+        sourceUrl: challenge.sourceUrl ?? null,
+        creditUrl: challenge.creditUrl ?? null,
+        choiceIndex: answer?.choice_index ?? null,
+        verdict: !player ? null : answer?.correct === true ? "right" : answer?.correct === false ? "wrong" : "not_counted",
+        awardedXp: answer?.awarded_points ?? 0,
+      };
+    });
 
   return {
     code: currentGame.code,
@@ -883,12 +935,14 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
     status: currentGame.status,
     isHost: player?.is_host ?? false,
     maxPlayers: currentGame.max_players,
+    pack: currentGame.pack ?? "mixed",
     playerCount: board.length,
     roundCount: currentGame.round_count,
     currentRoundIndex: currentGame.current_round,
     settledRounds,
     pendingRounds,
     lastResult,
+    roundRecap,
     currentRound,
     leaderboard: board,
     winner,
@@ -917,7 +971,8 @@ async function createLobby(db: DatabaseClient, body: Record<string, unknown>) {
   const playerKey = normalizePlayerKey(body.playerId);
   const displayName = normalizeName(body.displayName);
   const signerAddress = normalizeSignerAddress(body.signerAddress);
-  if (!playerKey || !displayName || !signerAddress) return json({ error: "Enter a valid player name." }, 400);
+  const pack = normalizePack(body.pack ?? "mixed");
+  if (!playerKey || !displayName || !signerAddress || !pack) return json({ error: "Check the player name and game pack." }, 400);
   const playerToken = createToken();
   const playerTokenHash = await sha256Hex(`landmark-token:${playerToken}`);
   const playerHash = await sha256Hex(`find-the-landmark:${playerKey}`);
@@ -931,6 +986,7 @@ async function createLobby(db: DatabaseClient, body: Record<string, unknown>) {
         host_player_key: playerKey,
         contract_version: "v4",
         contract_address: V4_CONTRACT_ADDRESS,
+        pack,
       })
       .select("*")
       .single();
@@ -1031,7 +1087,7 @@ async function startGame(
   if ((players as PlayerRow[]).some((entry) => !normalizeSignerAddress(entry.signer_address))) {
     return json({ error: "A player must rejoin this lobby." }, 409);
   }
-  const plan = await Promise.all(createGamePlan().map(async (round) => {
+  const plan = await Promise.all(createGamePlan(game.pack ?? "mixed").map(async (round) => {
     if (round.kind !== "identify") return round;
     if (!round.image) throw new Error("Round image is missing.");
     return { ...round, ...(await mirrorRoundEvidence(db, round.image)) };
@@ -1109,16 +1165,34 @@ Deno.serve(async (request: Request) => {
   if (request.method !== "POST") return json({ error: "Method not allowed." }, 405);
 
   const rawBody = await request.text();
-  const nonce = rawBody.length <= 20_000 ? await authenticate(request, rawBody) : null;
-  if (!nonce) {
-    return json({ error: "Unauthorized request." }, 401);
-  }
+  if (rawBody.length > 20_000) return json({ error: "Unauthorized request." }, 401);
   let body: Record<string, unknown>;
   try {
     body = JSON.parse(rawBody) as Record<string, unknown>;
   } catch {
     return json({ error: "Invalid JSON." }, 400);
   }
+
+  if (body.action === "tick") {
+    const token = request.headers.get("x-landmark-cron-token") ?? "";
+    if (!/^[a-f0-9]{64}$/.test(token) || Object.keys(body).length !== 1) {
+      return json({ error: "Unauthorized request." }, 401);
+    }
+    try {
+      const db = database();
+      const { data, error } = await db.from("landmark_cron_auth").select("token_hash").eq("id", 1).single();
+      if (error || data?.token_hash !== await sha256Hex(token)) {
+        return json({ error: "Unauthorized request." }, 401);
+      }
+      return json(await tickGames(db));
+    } catch (caught) {
+      console.error(`[landmark-tick] ${caught instanceof Error ? caught.message : String(caught)}`);
+      return json({ error: "Game progress unavailable." }, 502);
+    }
+  }
+
+  const nonce = await authenticate(request, rawBody);
+  if (!nonce) return json({ error: "Unauthorized request." }, 401);
 
   try {
     const db = database();

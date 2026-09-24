@@ -488,11 +488,23 @@ export const CONTENT_POOL_COUNTS = Object.freeze({
   total: identifyBank.length + quizBank.length + genLayerQuizBank.length,
 });
 
-export function createGamePlan(): GameRound[] {
-  const landmarks = shuffled(identifyBank).slice(0, 5);
-  const quizzes = shuffled(quizBank).slice(0, 3);
-  const docs = shuffled(genLayerQuizBank).slice(0, 4);
-  return [
+export type GamePack = "mixed" | "landmarks" | "genlayer";
+
+export function createGamePlan(pack: GamePack = "mixed"): GameRound[] {
+  const landmarks = shuffled(identifyBank).slice(0, pack === "landmarks" ? 8 : pack === "genlayer" ? 4 : 5);
+  const quizzes = shuffled(quizBank).slice(0, pack === "landmarks" ? 4 : 3);
+  const docs = shuffled(genLayerQuizBank).slice(0, pack === "genlayer" ? 8 : 4);
+  const plan = pack === "landmarks" ? [
+    landmarks[0], landmarks[1], quizzes[0],
+    landmarks[2], landmarks[3], quizzes[1],
+    landmarks[4], landmarks[5], quizzes[2],
+    landmarks[6], landmarks[7], quizzes[3],
+  ] : pack === "genlayer" ? [
+    docs[0], docs[1], landmarks[0],
+    docs[2], docs[3], landmarks[1],
+    docs[4], docs[5], landmarks[2],
+    docs[6], docs[7], landmarks[3],
+  ] : [
     landmarks[0],
     docs[0],
     landmarks[1],
@@ -505,7 +517,8 @@ export function createGamePlan(): GameRound[] {
     quizzes[2],
     docs[3],
     landmarks[4],
-  ].map(withShuffledOptions);
+  ];
+  return plan.map(withShuffledOptions);
 }
 
 export function contractPlan(plan: readonly GameRound[]) {

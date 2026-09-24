@@ -6,9 +6,9 @@ const baseUrl = (process.argv[2] ?? "https://find-the-landmark.vercel.app").repl
 const runId = `${Date.now().toString(36)}${randomUUID().replaceAll("-", "").slice(0, 6)}`;
 const timings = new Map();
 const signedPlayers = new Set();
-// Three round-boundary bursts can overlap inside StudioNet's rolling minute.
-// Eight writes per round stays below its 30 write/minute public-RPC bucket.
-const ACTIVE_PLAYERS_PER_ROUND = 8;
+// Eight signed writes per round stays below StudioNet's public-RPC bucket.
+const PLAYER_COUNT = 8;
+const ACTIVE_PLAYERS_PER_ROUND = PLAYER_COUNT;
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -73,7 +73,7 @@ const hostSession = {
 const host = { session: hostSession, signer: hostSigner };
 const players = [host];
 
-const joinNumbers = Array.from({ length: 49 }, (_, index) => index + 1);
+const joinNumbers = Array.from({ length: PLAYER_COUNT - 1 }, (_, index) => index + 1);
 const joined = await inBatches(joinNumbers, 10, async (index) => {
   const playerId = `load_${runId}_${String(index).padStart(2, "0")}`;
   const signer = createGameSigner();
@@ -96,7 +96,7 @@ const overflow = await gameRequest({
   signerAddress: createGameSigner().address,
 }, [409]);
 if (!/full/i.test(overflow.data.error ?? "")) {
-  throw new Error(`51st player was not rejected as full: ${JSON.stringify(overflow.data)}`);
+  throw new Error(`Ninth player was not rejected as full: ${JSON.stringify(overflow.data)}`);
 }
 
 await gameRequest({ action: "start", ...host.session });
@@ -163,14 +163,14 @@ state = await waitForState(
   900_000,
 );
 const results = (await gameRequest({ action: "results", code })).data;
-if (results.status !== "finished" || results.leaderboard?.length !== 50) {
+if (results.status !== "finished" || results.leaderboard?.length !== PLAYER_COUNT) {
   throw new Error(`results lookup failed: ${JSON.stringify(results)}`);
 }
 if (results.settledRounds !== 12 || results.pendingRounds !== 0) {
   throw new Error(`not every round finalized: ${JSON.stringify({ settledRounds: results.settledRounds, pendingRounds: results.pendingRounds })}`);
 }
-if (signedPlayers.size !== 50) {
-  throw new Error(`not every player signed an answer: ${signedPlayers.size}/50`);
+if (signedPlayers.size !== PLAYER_COUNT) {
+  throw new Error(`not every player signed an answer: ${signedPlayers.size}/${PLAYER_COUNT}`);
 }
 
 const timingSummary = Object.fromEntries([...timings].map(([action, values]) => [action, {

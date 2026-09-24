@@ -55,3 +55,18 @@ test("answer positions are shuffled between games", () => {
 
   assert.ok([...firstOptions.values()].every((positions) => positions.size > 1));
 });
+
+test("themed packs remain twelve distinct rounds with verifiable sources", () => {
+  for (const [pack, expected] of [
+    ["landmarks", { identify: 8, atlas: 4, docs: 0 }],
+    ["genlayer", { identify: 4, atlas: 0, docs: 8 }],
+  ]) {
+    const plan = createGamePlan(pack);
+    assert.equal(plan.length, 12);
+    assert.equal(new Set(plan.map((round) => round.challengeId)).size, 12);
+    assert.equal(plan.filter((round) => round.kind === "identify").length, expected.identify);
+    assert.equal(plan.filter((round) => round.city === "Atlas quiz").length, expected.atlas);
+    assert.equal(plan.filter((round) => round.city === "GenLayer docs").length, expected.docs);
+    assert.ok(plan.filter((round) => round.kind === "quiz").every((round) => Boolean(round.sourceUrl)));
+  }
+});

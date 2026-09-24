@@ -56,7 +56,8 @@ test("server-renders the Find the Landmark game", async (context) => {
   assert.match(html, /<h1>TEST<br\/>YOUR<br\/><em>METTLE\.<\/em><\/h1>/);
   assert.match(html, /class="brand-symbol"/);
   assert.match(html, /MAKE LOBBY/);
-  assert.match(html, /50 MAX/);
+  assert.match(html, /8 MAX/);
+  assert.match(html, /GENLAYER LAB/);
   assert.match(html, /12.*ROUNDS/);
   assert.match(html, /GENLAYER DOCS/);
   assert.doesNotMatch(html, /DAILY|PHOTO HUNT|GLOBAL XP/);
