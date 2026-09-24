@@ -76,6 +76,7 @@ type GameState = {
   currentRoundIndex: number;
   settledRounds: number;
   pendingRounds: number;
+  lastResult: { position: number; verdict: "right" | "wrong" | "not_counted"; awardedXp: number } | null;
   currentRound: RoundState | null;
   leaderboard: LeaderboardEntry[];
   winner: LeaderboardEntry | null;
@@ -176,6 +177,15 @@ function Board({ entries, full = false }: { entries: LeaderboardEntry[]; full?: 
         ))}
       </ol>
     </section>
+  );
+}
+
+function LastResult({ result }: { result: NonNullable<GameState["lastResult"]> }) {
+  const verdict = result.verdict === "right" ? "RIGHT" : result.verdict === "wrong" ? "WRONG" : "NOT COUNTED";
+  return (
+    <p className={`round-feedback ${result.verdict}`} role="status">
+      ROUND {String(result.position + 1).padStart(2, "0")} · {verdict} · +{result.awardedXp} XP
+    </p>
   );
 }
 
@@ -284,6 +294,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!realtimeClient || !game?.realtimeGameId || game.status === "finished" || game.status === "error") return;
+    let refreshTimer = 0;
     const channel = realtimeClient
       .channel(`landmark-game-${game.realtimeGameId}`)
       .on(
@@ -295,12 +306,19 @@ export default function Home() {
           filter: `game_id=eq.${game.realtimeGameId}`,
         },
         () => {
-          if (session) void refresh(session);
-          else if (viewedResultsCode) void refreshResults(viewedResultsCode);
+          if (refreshTimer) return;
+          refreshTimer = window.setTimeout(() => {
+            refreshTimer = 0;
+            if (session) void refresh(session);
+            else if (viewedResultsCode) void refreshResults(viewedResultsCode);
+          }, 750);
         },
       )
       .subscribe();
-    return () => { void realtimeClient.removeChannel(channel); };
+    return () => {
+      window.clearTimeout(refreshTimer);
+      void realtimeClient.removeChannel(channel);
+    };
   }, [game?.realtimeGameId, game?.status, refresh, refreshResults, session, viewedResultsCode]);
 
   useEffect(() => {
@@ -615,6 +633,7 @@ export default function Home() {
           <span>{sealing ? `${game.settledRounds}/${game.roundCount}` : `00/${String(game.roundCount).padStart(2, "0")}`}</span>
           <h1>{sealing ? "SEALING\nSCORES" : "MAKING\nTHE BOARD"}</h1>
           <div className="status-loader"><i /></div>
+          {game.lastResult && <LastResult result={game.lastResult} />}
           {!sealing ? <p className="status-tip">TIP · PLEASE STAY CONNECTED UNTIL THE GAME ENDS</p> : null}
         </section>
         <Board entries={game.leaderboard} />
@@ -645,6 +664,7 @@ export default function Home() {
           <span>WINNER</span>
           <h1>{game.winner?.displayName || "TIE GAME"}</h1>
           <strong>{game.winner?.score ?? 0} XP</strong>
+          {game.lastResult && <LastResult result={game.lastResult} />}
           <button type="button" className="primary-action" onClick={leaveGame}>NEW LOBBY<i>↗</i></button>
         </section>
         <Board entries={game.leaderboard} full />
@@ -706,6 +726,7 @@ export default function Home() {
               );
             })}
           </div>
+          {game.lastResult && <LastResult result={game.lastResult} />}
           {error && <p className="form-error" role="alert">{error}</p>}
         </section>
         <Board entries={game.leaderboard.slice(0, 8)} />

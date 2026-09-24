@@ -810,6 +810,24 @@ a:focus-visible {
   margin-top: 12px;
 }
 
+.round-feedback {
+  width: fit-content;
+  margin: 18px 0 0;
+  padding: 9px 11px;
+  border: 1px solid currentColor;
+  font: 800 11px var(--mono);
+  letter-spacing: 0.04em;
+}
+
+.round-feedback.right {
+  background: var(--mint);
+}
+
+.round-feedback.wrong,
+.round-feedback.not_counted {
+  background: var(--paper);
+}
+
 .scoreboard {
   min-width: 0;
   min-height: 0;

@@ -7,6 +7,7 @@ import {
   MagickFormat,
 } from "npm:@imagemagick/magick-wasm@0.0.42";
 import { verifyMessage } from "npm:viem@2.55.18";
+import { scheduledClockChange } from "./clock.ts";
 import { contractPlan, createGamePlan, type GameRound } from "./content.ts";
 import {
   executionFailureReason,
@@ -433,12 +434,13 @@ async function syncScheduledClock(db: DatabaseClient, game: GameRow) {
       .eq("status", "queued");
     if (roundError) throw roundError;
   }
+  const change = scheduledClockChange(game, current, verifying);
+  if (!change) return;
   const { error: gameError } = await db.from("landmark_games").update({
-    status: verifying ? "verifying" : "running",
-    current_round: verifying ? game.round_count : current,
+    ...change,
     next_check_at: null,
     updated_at: new Date().toISOString(),
-  }).eq("id", game.id).in("status", ["registering", "running", "verifying"]);
+  }).eq("id", game.id).eq("status", game.status).eq("current_round", game.current_round);
   if (gameError) throw gameError;
 }
 
@@ -574,7 +576,7 @@ async function submitDueFinalization(
   const { data: due, error } = await db.from("landmark_game_rounds")
     .select("*")
     .eq("game_id", game.id)
-    .in("status", ["queued", "open", "revealing", "revealed"])
+    .eq("status", "revealed")
     .lte("finalize_after", now)
     .order("position", { ascending: true })
     .limit(1)
@@ -583,7 +585,7 @@ async function submitDueFinalization(
   const { data: round } = await db.from("landmark_game_rounds")
     .update({ status: "finalizing", next_check_at: new Date(Date.now() + 5_000).toISOString() })
     .eq("id", due.id)
-    .in("status", ["queued", "open", "revealing", "revealed"])
+    .eq("status", "revealed")
     .select("*")
     .maybeSingle();
   if (!round) return;
@@ -730,6 +732,12 @@ async function progressGame(db: DatabaseClient, originalGame: GameRow) {
     checkRevealReceipt(db, game, readClient),
     checkFinalizationReceipt(db, game, readClient),
   ]);
+  const { data: checkedGame, error: checkedError } = await db.from("landmark_games")
+    .select("status")
+    .eq("id", game.id)
+    .single();
+  if (checkedError) throw checkedError;
+  if (checkedGame.status === "error" || checkedGame.status === "finished") return;
   await submitDueReveal(db, game, writeClient);
   await submitDueFinalization(db, game, writeClient);
 }
@@ -746,6 +754,28 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
     ? (players as PlayerRow[]).find((entry) => entry.id === playerId) ?? null
     : null;
   if (playerId && !player) throw new Error("INVALID_SESSION");
+
+  const { data: playerAnswers, error: answersError } = player
+    ? await db.from("landmark_game_answers")
+      .select("round_id,correct,awarded_points")
+      .eq("player_id", player.id)
+    : { data: [], error: null };
+  if (answersError) throw answersError;
+  const settledPositions = new Map(
+    (rounds as RoundRow[])
+      .filter((round) => round.status === "settled")
+      .map((round) => [round.id, round.position]),
+  );
+  const lastResult = (playerAnswers ?? [])
+    .flatMap((answer) => {
+      const position = settledPositions.get(answer.round_id);
+      return position === undefined ? [] : [{
+        position,
+        verdict: answer.correct === null ? "not_counted" : answer.correct ? "right" : "wrong",
+        awardedXp: answer.awarded_points ?? 0,
+      }];
+    })
+    .sort((a, b) => b.position - a.position)[0] ?? null;
 
   let currentRound: Record<string, unknown> | null = null;
   if (currentGame.status === "running" && currentGame.current_round >= 0 && currentGame.current_round < currentGame.round_count) {
@@ -810,6 +840,7 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
     currentRoundIndex: currentGame.current_round,
     settledRounds,
     pendingRounds,
+    lastResult,
     currentRound,
     leaderboard: board,
     winner,

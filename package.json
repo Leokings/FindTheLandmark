@@ -9,7 +9,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "npm run build && node --test tests/content.test.mjs tests/genlayer-receipt.test.mjs tests/genlayer-session.test.mjs tests/rendered-html.test.mjs",
+    "test": "npm run build && node --test tests/clock.test.mjs tests/content.test.mjs tests/genlayer-receipt.test.mjs tests/genlayer-session.test.mjs tests/rendered-html.test.mjs",
     "test:sources": "node tests/source-hashes.mjs",
     "test:load:50": "node tests/load/fifty-player.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .vercel"
