@@ -1,6 +1,36 @@
 # Production test evidence
 
-This is historical evidence of a 50-person roster, not 50 simultaneous answerers. Only 8 players answered per round. New lobbies are capped at 8 until a higher full-participation capacity is measured.
+## Current release: eight active players, twelve rounds
+
+- Date: 2026-09-24
+- [Completed match and round-by-round sources](https://find-the-landmark.vercel.app/?results=K82K7A)
+- [StudioNet contract](https://explorer-studio.genlayer.com/address/0x677388E350bef8FdfD41f8F8Dc13c558175f3C7F) (`find-the-landmark.lobby-game.v4.3`)
+- Contract deployment: `0xea597c0cbec5e4fba3a5bfbb55218ab2d7537551b2baf8e54f38a2f0902aafa3` (`FINALIZED`, `MAJORITY_AGREE`)
+- Game code: `K82K7A`; registration: `0x85ed2ebd4a3e1c666f667bd8bb41044dda26d2918a31c1be29530134ee9e5b53`; activation: `0x7fad3b311198fca3ffc021b179543055cb00faf562646bd1a084d42f6d0340cd`
+- Eight players signed and saved answers in every round: **96/96**. A ninth player was rejected as full.
+- All **12/12** rounds settled after finalized validator consensus; zero void or pending rounds.
+- Final results reopen by room code: eight leaderboard rows, twelve recaps, and twelve source/photo-credit links.
+- Total XP: **2,554** in both the app database and finalized contract leaderboard. Winner: Load 06 with **489 XP** in both.
+- Production API response p95: state **8.2 s**, answer **8.5 s**. Transient 502–504 responses were retried; the full test completed without a failed answer confirmation.
+
+| Round | Finalization transaction |
+|---:|---|
+| 1 | `0x5462af1c456767d8ff92f9602842ced256423072985db7d0414265d0c5b03b17` |
+| 2 | `0x084d1f257aa5da25b7c1e4bae50fb8076b6097d3803edbca3f90c2e3bfb9cc4f` |
+| 3 | `0x73d8510119d6d889d94323468d38a785f46e3cd91bb9a48b4d19332cb29e3291` |
+| 4 | `0x036ac4e83512e161da2d97d2fa34a5c8aea413bf4932b5fa4e89cb87a6371251` |
+| 5 | `0xc763324ecbcf0ff0da14e55712fef49fb008607d4a4bb1ef8ee2f9e7bce027e7` |
+| 6 | `0xa7ffb1487d72910f1461d6bc3bded0d75be718b436caed6f0ae89c03c5c3f278` |
+| 7 | `0xa10a228f63bba3fbe2e65ab1a20ed28c0b3d0ccdb6f3f354333f190c55e31667` |
+| 8 | `0x64e62907e36fc15d30cd729eca2a229d88c7c2f6ac701c40df8d5852ae1b7873` |
+| 9 | `0xe498ad84c61f88a1a929f3cc936facdfe15cd3a43e6552cc1cfea8457fd1a7e6` |
+| 10 | `0x1adf3ce78892bae634314c6dac766bde1512d6e9afdc5de160d3da29f68eeee1` |
+| 11 | `0x9478e0fde599dc37504fde5847f1b4aad3229e85a066f7c4a6afa9ef86f99f3d` |
+| 12 | `0x10dbbc0a3a20916b7f42cf456dbb7f360e9ee1611ab3861ef0449b9b820d7712` |
+
+## Historical roster test
+
+The following is historical evidence of a 50-person roster, **not** 50 simultaneous answerers. Only eight players answered per round. Current lobbies are capped at eight until higher full-participation capacity is measured.
 
 - Date: 2026-08-21
 - App: https://find-the-landmark.vercel.app/

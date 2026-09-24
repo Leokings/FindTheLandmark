@@ -556,9 +556,10 @@ a:focus-visible {
 }
 
 .status-shell {
+  height: 100dvh;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 380px;
-  grid-template-rows: 76px 1fr;
+  grid-template-rows: 76px minmax(0, 1fr);
   background: var(--acid);
 }
 
@@ -570,10 +571,12 @@ a:focus-visible {
   position: relative;
   z-index: 1;
   min-width: 0;
+  min-height: 0;
   padding: clamp(42px, 8vw, 120px);
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: safe center;
+  overflow-y: auto;
   border-right: 1px solid var(--ink);
   container-type: inline-size;
 }
@@ -990,9 +993,10 @@ a:focus-visible {
 
 .result-shell {
   min-height: 100dvh;
+  height: 100dvh;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 0.65fr);
-  grid-template-rows: 76px 1fr;
+  grid-template-rows: 76px minmax(0, 1fr);
   color: var(--ink);
   background: var(--acid);
 }
@@ -1006,11 +1010,13 @@ a:focus-visible {
   position: relative;
   z-index: 1;
   min-width: 0;
+  min-height: 0;
   padding: clamp(44px, 8vw, 120px);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  justify-content: center;
+  justify-content: safe center;
+  overflow-y: auto;
   border-right: 1px solid var(--ink);
   container-type: inline-size;
 }
@@ -1118,6 +1124,15 @@ a:focus-visible {
   .status-shell,
   .result-shell {
     display: block;
+    overflow: visible;
+  }
+
+  .status-shell,
+  .result-shell {
+    height: auto;
+  }
+
+  .status-poster {
     overflow: visible;
   }
 
@@ -1322,6 +1337,7 @@ a:focus-visible {
   .result-copy {
     min-height: calc(100dvh - 62px);
     padding: 50px 22px;
+    overflow: visible;
     border-right: 0;
     border-bottom: 1px solid var(--ink);
   }
