@@ -6,7 +6,7 @@ GenLayer validators settle each shared round. A round awards XP only after succe
 
 The lobby offers a copyable invite link. After a match, the room code or shareable results link opens the leaderboard and a round-by-round recap with correct answers and source links. Answer-bearing sources and original image filenames are hidden while a round is live.
 
-New games have a two-minute registration buffer and one-minute answer windows so signed StudioNet submissions can land. The app confirms each commitment's finalized onchain execution and timestamp before calling the answer received.
+New games have a two-minute registration buffer and one-minute answer windows so signed StudioNet submissions can land. The app checks each player's exact commitment and onchain timestamp in finalized contract state before calling the answer received; older matches use finalized transaction receipts. A pending answer keeps syncing automatically, including after the next round opens.
 
 ## Run
 
@@ -29,6 +29,6 @@ gltest tests/integration/ -v -s --network studionet
 The Results tab opens the final leaderboard for any completed game code. New lobbies are capped at 8 because the older 50-person roster test exercised only 8 simultaneous signed answerers per round. The older result remains historical evidence, not a claim of 50-active capacity.
 
 - [Live app](https://find-the-landmark.vercel.app/)
-- [StudioNet contract](https://explorer-studio.genlayer.com/address/0x61D886BA5F06dC3AbcC1ac711326c1AD6aF4106e)
+- [StudioNet contract](https://explorer-studio.genlayer.com/address/0xF5E1857c9B87246ABcB0c836FD64C1Da7451f9a6)
 - Deployment record: `deployments/studionet.json`
 - Production test: `docs/TEST-EVIDENCE.md`

@@ -734,7 +734,7 @@ export default function Home() {
         <div className="waiting-grid">
           <section className="code-panel">
             <span>ROOM CODE</span>
-            <button type="button" className="room-code" onClick={copyCode}>{game.code}</button>
+            <h1 className="room-title"><button type="button" className="room-code" onClick={copyCode}>{game.code}</button></h1>
             <p>{copied ? "COPIED" : "TAP TO COPY"}</p>
             <button type="button" className="text-action invite-action" onClick={() => void copyLink("room")}>{copied ? "LINK COPIED" : "COPY INVITE LINK ↗"}</button>
             {manualLink && <input className="share-fallback" aria-label="Room code or invite link" readOnly value={manualLink} onFocus={(event) => event.target.select()} />}

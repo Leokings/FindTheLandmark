@@ -8,7 +8,7 @@ import re
 from urllib.parse import parse_qs, urlsplit
 
 
-POLICY_VERSION = "find-the-landmark.lobby-game.v4.1"
+POLICY_VERSION = "find-the-landmark.lobby-game.v4.2"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
 MAX_SOURCE_PROMPT_CHARS = 120_000
@@ -552,6 +552,7 @@ class LandmarkLobby(gl.Contract):
         revealed = self.answer_revealed.get(key, False)
         return {
             "committed": committed,
+            "commitment": str(self.answer_commitment.get(key, "")),
             "committed_at_ms": int(self.answer_committed_at_ms.get(key, 0)),
             "revealed": revealed,
             "choice_index": int(self.answer_choice_plus_one.get(key, 0)) - 1 if revealed else -1,

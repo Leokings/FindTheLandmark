@@ -16,6 +16,7 @@ import {
   hasSuccessfulFinalizedExecution,
   isTerminal,
   signedCommitResult,
+  signedCommitStateResult,
   statusName,
 } from "./genlayer-receipt.ts";
 
@@ -24,7 +25,7 @@ const magickWasm = await Deno.readFile(
 );
 await initializeImageMagick(magickWasm);
 
-const V4_CONTRACT_ADDRESS = "0x61D886BA5F06dC3AbcC1ac711326c1AD6aF4106e";
+const V4_CONTRACT_ADDRESS = "0xF5E1857c9B87246ABcB0c836FD64C1Da7451f9a6";
 const EXPECTED_RELAYER = "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec";
 const SITE_SIGNERS = [
   "0xdc2606D6c7833178fFF3D456ADEF8d97029ea196",
@@ -184,7 +185,7 @@ async function enforceRateLimit(db: DatabaseClient, body: Record<string, unknown
     : action === "state"
     ? { key: `state:${playerKey}`, limit: 300 }
     : action === "answer"
-    ? { key: `answer:${playerKey}`, limit: 40 }
+    ? { key: `answer:${playerKey}`, limit: 120 }
     : { key: `start:${playerKey}`, limit: 20 };
 
   const { data, error } = await db.rpc("landmark_take_rate_limit", {
@@ -367,6 +368,29 @@ async function signedCommitStatus(
   commitment: string,
 ): Promise<"confirmed" | "pending" | "invalid" | "late"> {
   const { readClient } = await genlayerClients();
+  // A finalized contract view is the authority for a signed commitment. It
+  // also avoids a separate receipt lookup for every player during a burst.
+  // Older deployed contracts lack the commitment field, so keep their receipt
+  // verification path until those games finish.
+  try {
+    const state = await readClient.readContract({
+      address: gameContract(game),
+      functionName: "get_answer_state",
+      args: [game.contract_game_id, round.position, signerAddress],
+      stateStatus: "finalized",
+    }) as Record<string, unknown>;
+    if (typeof state.commitment === "string") {
+      if (!round.started_at || !round.ends_at) return "invalid";
+      return signedCommitStateResult(state, {
+        commitment,
+        startMs: Date.parse(round.started_at),
+        endMs: Date.parse(round.ends_at),
+      });
+    }
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    if (!/not found|timed out|fetch failed|ECONNRESET|bad gateway|service unavailable/i.test(message)) throw caught;
+  }
   let receipt: unknown = null;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
@@ -1313,7 +1337,11 @@ Deno.serve(async (request: Request) => {
         elapsed_ms: 0,
         signer_address: signerAddress,
         commitment,
-        commit_transaction_hash: commitTransactionHash,
+        // New contracts prove sender, commitment, and timestamp directly in
+        // finalized storage. An unverified client-provided hash is not evidence.
+        commit_transaction_hash: game.contract_address?.toLowerCase() === V4_CONTRACT_ADDRESS.toLowerCase()
+          ? null
+          : commitTransactionHash,
         reveal_salt: revealSalt,
       });
       if (error) {

@@ -38,12 +38,12 @@ async function gameRequest(body, expectedStatuses = [200, 201]) {
 }
 
 async function confirmedAnswer(body) {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
     try {
       return await gameRequest(body);
     } catch (error) {
-      if (!/^answer returned 503: Answer is still confirming onchain\./.test(String(error)) || attempt === 4) throw error;
-      await sleep(3_000);
+      if (!/^answer returned 503: Answer is still confirming onchain\./.test(String(error)) || attempt === 24) throw error;
+      await sleep(4_000);
     }
   }
   throw new Error("Answer could not be confirmed.");
@@ -85,6 +85,7 @@ const created = await gameRequest({
   signerAddress: hostSigner.address,
 });
 const code = created.data.code;
+console.log(`Eight-player test room: ${code}`);
 const hostSession = {
   code,
   playerId: hostPlayerId,
@@ -92,6 +93,7 @@ const hostSession = {
 };
 const host = { session: hostSession, signer: hostSigner };
 const players = [host];
+const pendingConfirmations = [];
 
 const joinNumbers = Array.from({ length: PLAYER_COUNT - 1 }, (_, index) => index + 1);
 const joined = await inBatches(joinNumbers, 10, async (index) => {
@@ -140,7 +142,7 @@ for (let position = 0; position < 12; position += 1) {
     const playerIndex = (position * ACTIVE_PLAYERS_PER_ROUND + offset) % players.length;
     return { player: players[playerIndex], playerIndex };
   });
-  const answerResults = await Promise.all(activePlayers.map(async ({ player, playerIndex }) => {
+  const signedAnswers = await Promise.all(activePlayers.map(async ({ player, playerIndex }) => {
     const choiceIndex = (position + playerIndex) % 4;
     const proof = await commitSignedAnswer({
       signer: player.signer,
@@ -149,7 +151,9 @@ for (let position = 0; position < 12; position += 1) {
       roundIndex: position,
       choiceIndex,
     });
-    return confirmedAnswer({
+    return { player, choiceIndex, proof };
+  }));
+  const confirmations = Promise.all(signedAnswers.map(({ player, choiceIndex, proof }) => confirmedAnswer({
       action: "answer",
       ...player.session,
       roundIndex: position,
@@ -157,11 +161,11 @@ for (let position = 0; position < 12; position += 1) {
       commitment: proof.commitment,
       revealSalt: proof.salt,
       commitTransactionHash: String(proof.commitTxHash),
-    });
-  }));
-  if (answerResults.some(({ data }) => data.accepted !== true)) {
-    throw new Error(`round ${position + 1} did not accept every rotated answer`);
-  }
+    }))).then(
+      (results) => ({ position, results, error: null }),
+      (error) => ({ position, results: null, error }),
+    );
+  pendingConfirmations.push(confirmations);
   activePlayers.forEach(({ player }) => signedPlayers.add(player.signer.address.toLowerCase()));
   const endsAt = Date.parse(state.currentRound.endsAt);
   await sleep(Math.max(0, endsAt - Date.now() + 250));
@@ -173,7 +177,15 @@ for (let position = 0; position < 12; position += 1) {
     `round ${position + 1} submission`,
     180_000,
   );
-  console.log(`round ${position + 1}/12: ${ACTIVE_PLAYERS_PER_ROUND} signed answers accepted`);
+  console.log(`round ${position + 1}/12: ${ACTIVE_PLAYERS_PER_ROUND} signed commitments sent`);
+}
+
+const confirmedRounds = await Promise.all(pendingConfirmations);
+for (const confirmation of confirmedRounds) {
+  if (confirmation.error) throw new Error(`round ${confirmation.position + 1} answer confirmation failed: ${confirmation.error}`);
+  if (confirmation.results?.some(({ data }) => data.accepted !== true)) {
+    throw new Error(`round ${confirmation.position + 1} did not confirm every signed answer`);
+  }
 }
 
 state = await waitForState(

@@ -159,7 +159,7 @@ def test_policy_uses_signed_commits_and_transaction_time(direct_vm, direct_deplo
     contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
     policy = contract.get_policy()
 
-    assert policy["policy_version"] == "find-the-landmark.lobby-game.v4.1"
+    assert policy["policy_version"] == "find-the-landmark.lobby-game.v4.2"
     assert policy["max_players"] == 8
     assert policy["start_delay_ms"] == 120_000
     assert policy["answer_authentication"] == "direct_eoa_commitment"
@@ -262,7 +262,10 @@ def test_omitted_player_can_reveal_directly(
         [{"player_address": address_text(direct_alice), "choice_index": 1, "salt": SALT_ONE}],
         "2026-08-21T10:02:21Z",
     )
-    assert contract.get_answer_state("game-one", 0, address_text(direct_bob))["revealed"] is False
+    bob_state = contract.get_answer_state("game-one", 0, address_text(direct_bob))
+    assert bob_state["revealed"] is False
+    assert len(bob_state["commitment"]) == 64
+    assert bob_state["committed_at_ms"] > 0
 
     direct_vm.sender = as_address(direct_bob)
     direct_vm.warp("2026-08-21T10:02:30Z")

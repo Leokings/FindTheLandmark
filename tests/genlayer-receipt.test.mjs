@@ -7,6 +7,7 @@ import {
   hasSuccessfulFinalizedExecution,
   isTerminal,
   signedCommitResult,
+  signedCommitStateResult,
   statusName,
 } from "../supabase/functions/landmark-api/genlayer-receipt.ts";
 
@@ -108,4 +109,13 @@ test("a signed answer is confirmed only with its own successful onchain commit a
   const failed = structuredClone(receipt);
   failed.consensus_data.leader_receipt[0].execution_result = "ERROR";
   assert.equal(signedCommitResult(failed, expected), "invalid");
+});
+
+test("finalized signed commitment state confirms the exact hash and onchain time", () => {
+  const expected = { commitment: "a".repeat(64), startMs: 1000, endMs: 2000 };
+  assert.equal(signedCommitStateResult({ committed: false, commitment: "", committed_at_ms: 0 }, expected), "pending");
+  assert.equal(signedCommitStateResult({ committed: true, commitment: expected.commitment, committed_at_ms: 1500 }, expected), "confirmed");
+  assert.equal(signedCommitStateResult({ committed: true, commitment: expected.commitment, committed_at_ms: 2001 }, expected), "late");
+  assert.equal(signedCommitStateResult({ committed: true, commitment: "b".repeat(64), committed_at_ms: 1500 }, expected), "invalid");
+  assert.equal(signedCommitStateResult({ committed: true, commitment: expected.commitment, committed_at_ms: "bad" }, expected), "invalid");
 });

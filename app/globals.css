@@ -416,6 +416,11 @@ a:focus-visible {
   border-right: 1px solid var(--ink);
 }
 
+.room-title {
+  width: 100%;
+  margin: 0;
+}
+
 .room-code {
   width: 100%;
   max-width: 100%;

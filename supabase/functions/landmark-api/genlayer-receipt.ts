@@ -141,3 +141,18 @@ export function signedCommitResult(receipt: unknown, expected: {
   ) return "invalid";
   return createdAt < expected.startMs || createdAt > expected.endMs ? "late" : "confirmed";
 }
+
+export function signedCommitStateResult(state: unknown, expected: {
+  commitment: string;
+  startMs: number;
+  endMs: number;
+}): "pending" | "confirmed" | "late" | "invalid" {
+  if (!state || typeof state !== "object") return "pending";
+  const record = state as Record<string, unknown>;
+  if (record.committed !== true) return "pending";
+  if (typeof record.commitment !== "string"
+    || record.commitment.toLowerCase() !== expected.commitment.toLowerCase()) return "invalid";
+  const committedAt = Number(record.committed_at_ms);
+  if (!Number.isSafeInteger(committedAt) || committedAt <= 0) return "invalid";
+  return committedAt < expected.startMs || committedAt > expected.endMs ? "late" : "confirmed";
+}
