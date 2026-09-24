@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { scheduledClockChange } from "../supabase/functions/landmark-api/clock.ts";
+import { needsSupplementalReveal, scheduledClockChange } from "../supabase/functions/landmark-api/clock.ts";
 
 test("a state refresh does not write the same game clock again", () => {
   assert.equal(scheduledClockChange({ status: "running", current_round: 1, round_count: 12 }, 1, false), null);
   assert.equal(scheduledClockChange({ status: "verifying", current_round: 12, round_count: 12 }, 11, true), null);
+});
+
+test("a confirmed reveal batch is retried when later answers arrive", () => {
+  assert.equal(needsSupplementalReveal(2, 0), true);
+  assert.equal(needsSupplementalReveal(2, 1), true);
+  assert.equal(needsSupplementalReveal(2, 2), false);
 });
 
 test("the clock advances only when the round or phase changes", () => {

@@ -10,3 +10,7 @@ export function scheduledClockChange(game: ClockGame, roundIndex: number, verify
   if (game.status === status && game.current_round === current_round) return null;
   return { status, current_round };
 }
+
+export function needsSupplementalReveal(savedAnswers: number, confirmedAnswers: number) {
+  return savedAnswers > confirmedAnswers;
+}

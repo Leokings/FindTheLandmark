@@ -7,7 +7,7 @@ import {
   MagickFormat,
 } from "npm:@imagemagick/magick-wasm@0.0.42";
 import { verifyMessage } from "npm:viem@2.55.18";
-import { scheduledClockChange } from "./clock.ts";
+import { needsSupplementalReveal, scheduledClockChange } from "./clock.ts";
 import { contractPlan, createGamePlan, type GameRound } from "./content.ts";
 import {
   executionFailureReason,
@@ -90,6 +90,9 @@ type RoundRow = {
   reveal_deadline: string | null;
   finalize_after: string | null;
   reveal_transaction_hash: string | null;
+  reveal_answer_count: number;
+  pending_reveal_answer_count: number | null;
+  reveal_confirmed_at: string | null;
   finalize_transaction_hash: string | null;
   transaction_hash: string | null;
   correct_index: number | null;
@@ -444,25 +447,22 @@ async function syncScheduledClock(db: DatabaseClient, game: GameRow) {
   if (gameError) throw gameError;
 }
 
-async function submitDueReveal(
+async function sendRevealBatch(
   db: DatabaseClient,
   game: GameRow,
   writeClient: GenLayerWriteClient,
+  due: RoundRow,
 ) {
-  const now = new Date().toISOString();
-  const { data: due, error } = await db.from("landmark_game_rounds")
-    .select("*")
-    .eq("game_id", game.id)
-    .in("status", ["queued", "open"])
-    .lte("ends_at", now)
-    .order("position", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  if (error || !due) return;
+  const restoreStatus = due.status === "revealed" ? "revealed" : "open";
   const { data: round } = await db.from("landmark_game_rounds")
-    .update({ status: "revealing", next_check_at: new Date(Date.now() + 5_000).toISOString() })
+    .update({
+      status: "revealing",
+      reveal_transaction_hash: null,
+      pending_reveal_answer_count: null,
+      next_check_at: new Date(Date.now() + 5_000).toISOString(),
+    })
     .eq("id", due.id)
-    .in("status", ["queued", "open"])
+    .eq("status", due.status)
     .select("*")
     .maybeSingle();
   if (!round) return;
@@ -491,6 +491,7 @@ async function submitDueReveal(
     });
     const { error: updateError } = await db.from("landmark_game_rounds").update({
       reveal_transaction_hash: transactionHash,
+      pending_reveal_answer_count: reveals.length,
       next_check_at: new Date(Date.now() + 5_000).toISOString(),
       error_message: null,
     }).eq("id", round.id).eq("status", "revealing");
@@ -498,10 +499,47 @@ async function submitDueReveal(
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
     await db.from("landmark_game_rounds").update({
-      status: "open",
+      status: restoreStatus,
       next_check_at: new Date(Date.now() + 8_000).toISOString(),
       error_message: message.slice(0, 500),
     }).eq("id", round.id).eq("status", "revealing");
+  }
+}
+
+async function submitDueReveal(db: DatabaseClient, game: GameRow, writeClient: GenLayerWriteClient) {
+  // Commit transactions can be submitted before the cutoff but reach the API
+  // a few seconds later. Keep most of the two-minute reveal window available.
+  const dueAt = new Date(Date.now() - 35_000).toISOString();
+  const { data: due, error } = await db.from("landmark_game_rounds")
+    .select("*")
+    .eq("game_id", game.id)
+    .in("status", ["queued", "open"])
+    .lte("ends_at", dueAt)
+    .or(`next_check_at.is.null,next_check_at.lte.${new Date().toISOString()}`)
+    .order("position", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (due) await sendRevealBatch(db, game, writeClient, due as RoundRow);
+}
+
+async function submitSupplementalReveal(db: DatabaseClient, game: GameRow, writeClient: GenLayerWriteClient) {
+  const { data: revealed, error } = await db.from("landmark_game_rounds")
+    .select("*")
+    .eq("game_id", game.id)
+    .eq("status", "revealed")
+    .gt("reveal_deadline", new Date(Date.now() + 10_000).toISOString())
+    .or(`next_check_at.is.null,next_check_at.lte.${new Date().toISOString()}`)
+    .order("position", { ascending: true });
+  if (error) throw error;
+  for (const round of (revealed ?? []) as RoundRow[]) {
+    const { count, error: countError } = await db.from("landmark_game_answers")
+      .select("id", { count: "exact", head: true })
+      .eq("round_id", round.id);
+    if (countError) throw countError;
+    if (!needsSupplementalReveal(count ?? 0, round.reveal_answer_count)) continue;
+    await sendRevealBatch(db, game, writeClient, round);
+    return;
   }
 }
 
@@ -532,6 +570,9 @@ async function checkRevealReceipt(db: DatabaseClient, game: GameRow, readClient:
     const { error: updateError } = await db.from("landmark_game_rounds").update({
       status: "revealed",
       consensus_status: statusName(receipt),
+      reveal_answer_count: round.pending_reveal_answer_count ?? round.reveal_answer_count,
+      pending_reveal_answer_count: null,
+      reveal_confirmed_at: new Date().toISOString(),
       next_check_at: null,
       error_message: null,
     }).eq("id", round.id).eq("status", "revealing");
@@ -541,12 +582,13 @@ async function checkRevealReceipt(db: DatabaseClient, game: GameRow, readClient:
 
   const canRetry = Date.now() < Date.parse(round.reveal_deadline as string);
   const conciseError = canRetry ? "Answer reveal is retrying." : "Answers could not be revealed.";
-  if (canRetry) {
+  if (canRetry || round.reveal_confirmed_at) {
     const { error: retryError } = await db.from("landmark_game_rounds").update({
-      status: "open",
+      status: round.reveal_confirmed_at ? "revealed" : "open",
       reveal_transaction_hash: null,
+      pending_reveal_answer_count: null,
       consensus_status: statusName(receipt),
-      next_check_at: new Date(Date.now() + 8_000).toISOString(),
+      next_check_at: canRetry ? new Date(Date.now() + 8_000).toISOString() : null,
       error_message: conciseError,
     }).eq("id", round.id).eq("status", "revealing");
     if (retryError) throw retryError;
@@ -578,12 +620,17 @@ async function submitDueFinalization(
     .eq("game_id", game.id)
     .eq("status", "revealed")
     .lte("finalize_after", now)
+    .or(`next_check_at.is.null,next_check_at.lte.${now}`)
     .order("position", { ascending: true })
     .limit(1)
     .maybeSingle();
   if (error || !due) return;
   const { data: round } = await db.from("landmark_game_rounds")
-    .update({ status: "finalizing", next_check_at: new Date(Date.now() + 5_000).toISOString() })
+    .update({
+      status: "finalizing",
+      finalize_transaction_hash: null,
+      next_check_at: new Date(Date.now() + 5_000).toISOString(),
+    })
     .eq("id", due.id)
     .eq("status", "revealed")
     .select("*")
@@ -739,6 +786,7 @@ async function progressGame(db: DatabaseClient, originalGame: GameRow) {
   if (checkedError) throw checkedError;
   if (checkedGame.status === "error" || checkedGame.status === "finished") return;
   await submitDueReveal(db, game, writeClient);
+  await submitSupplementalReveal(db, game, writeClient);
   await submitDueFinalization(db, game, writeClient);
 }
 
