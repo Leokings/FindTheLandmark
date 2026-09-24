@@ -11,7 +11,7 @@
 - All **12/12** rounds settled after finalized validator consensus; zero void or pending rounds.
 - Final results reopen by room code: eight leaderboard rows, twelve recaps, and twelve source/photo-credit links.
 - Total XP: **2,554** in both the app database and finalized contract leaderboard. Winner: Load 06 with **489 XP** in both.
-- Production API response p95: state **8.2 s**, answer **8.5 s**. Transient 502–504 responses were retried; the full test completed without a failed answer confirmation.
+- Production API response p95: state **8.2 s**, answer **8.5 s**. The runner retries transient 502–504 responses; the full test completed without a failed answer confirmation.
 
 | Round | Finalization transaction |
 |---:|---|

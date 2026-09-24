@@ -1076,7 +1076,11 @@ a:focus-visible {
 
 .status-details .scoreboard {
   min-height: 0;
-  flex: 1;
+  flex: none;
+}
+
+.status-details .round-results {
+  flex: none;
 }
 
 .result-details .scoreboard-full {
@@ -1087,6 +1091,8 @@ a:focus-visible {
 .result-details .round-results {
   max-height: none;
   margin: 0;
+  flex: none;
+  overflow: visible;
 }
 
 .scoreboard-full {
