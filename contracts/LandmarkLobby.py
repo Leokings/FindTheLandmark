@@ -8,13 +8,13 @@ import re
 from urllib.parse import parse_qs, urlsplit
 
 
-POLICY_VERSION = "find-the-landmark.lobby-game.v4.2"
+POLICY_VERSION = "find-the-landmark.lobby-game.v4.3"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
 MAX_SOURCE_PROMPT_CHARS = 120_000
 MAX_PLAYERS = 8
 MAX_ROUNDS = 12
-GAME_START_DELAY_MS = 120_000
+GAME_START_DELAY_MS = 180_000
 ROUND_GAP_MS = 5_000
 REVEAL_WINDOW_MS = 120_000
 
@@ -381,6 +381,8 @@ class LandmarkLobby(gl.Contract):
 
     def _window(self, normalized_game_id: str, plan: list, round_index: int) -> dict:
         start_ms = int(self.game_start_ms[normalized_game_id])
+        if start_ms == 0:
+            raise gl.vm.UserError("The game has not been activated")
         for position in range(round_index):
             start_ms += plan[position]["duration_ms"] + ROUND_GAP_MS
         commit_deadline_ms = start_ms + plan[round_index]["duration_ms"]
@@ -497,19 +499,30 @@ class LandmarkLobby(gl.Contract):
 
         canonical_roster = json.dumps(roster, sort_keys=True, separators=(",", ":"))
         canonical_plan = json.dumps(plan, sort_keys=True, separators=(",", ":"))
-        start_ms = _now_ms() + GAME_START_DELAY_MS
         self.game_roster_json[normalized_game_id] = canonical_roster
         self.game_plan_json[normalized_game_id] = canonical_plan
-        self.game_start_ms[normalized_game_id] = u256(start_ms)
+        self.game_start_ms[normalized_game_id] = u256(0)
         self.game_exists[normalized_game_id] = True
         return {
             "game_id": normalized_game_id,
             "player_count": len(roster),
             "round_count": len(plan),
-            "start_ms": start_ms,
+            "start_ms": 0,
             "roster_sha256": hashlib.sha256(canonical_roster.encode("utf-8")).hexdigest(),
             "plan_sha256": hashlib.sha256(canonical_plan.encode("utf-8")).hexdigest(),
         }
+
+    @gl.public.write
+    def activate_game(self, game_id: str) -> dict:
+        if gl.message.sender_address != self.relayer:
+            raise gl.vm.UserError("Only the configured game relayer can activate games")
+        normalized_game_id, _, _ = self._game(game_id)
+        start_ms = int(self.game_start_ms[normalized_game_id])
+        if start_ms:
+            return {"game_id": normalized_game_id, "start_ms": start_ms, "duplicate": True}
+        start_ms = _now_ms() + GAME_START_DELAY_MS
+        self.game_start_ms[normalized_game_id] = u256(start_ms)
+        return {"game_id": normalized_game_id, "start_ms": start_ms, "duplicate": False}
 
     @gl.public.view
     def get_game(self, game_id: str) -> dict:

@@ -25,7 +25,7 @@ const magickWasm = await Deno.readFile(
 );
 await initializeImageMagick(magickWasm);
 
-const V4_CONTRACT_ADDRESS = "0xF5E1857c9B87246ABcB0c836FD64C1Da7451f9a6";
+const V4_CONTRACT_ADDRESS = "0x677388E350bef8FdfD41f8F8Dc13c558175f3C7F";
 const EXPECTED_RELAYER = "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec";
 const SITE_SIGNERS = [
   "0xdc2606D6c7833178fFF3D456ADEF8d97029ea196",
@@ -63,6 +63,7 @@ type GameRow = {
   contract_address: string | null;
   contract_game_id: string | null;
   registration_tx_hash: string | null;
+  activation_tx_hash: string | null;
   winner_player_id: string | null;
   next_check_at: string | null;
   worker_next_at: string | null;
@@ -440,6 +441,14 @@ async function scheduleRegisteredGame(
     stateStatus: "finalized",
   }) as Record<string, unknown>;
   const startMs = numericMillis(contractGame.start_ms, "game start");
+  if (startMs - Date.now() < 30_000) {
+    await db.from("landmark_games").update({
+      status: "error",
+      error_message: "The board arrived too late. Make a new lobby.",
+      updated_at: new Date().toISOString(),
+    }).eq("id", game.id).eq("status", "registering");
+    return;
+  }
   const windows = await Promise.all(game.plan.map(async (_round, position) => {
     const value = await readClient.readContract({
       address: gameContract(game),
@@ -820,20 +829,41 @@ async function progressGame(db: DatabaseClient, originalGame: GameRow) {
       .select("*")
       .maybeSingle();
     if (!claimed) return;
+    const twoStepActivation = gameContract(game).toLowerCase() === V4_CONTRACT_ADDRESS.toLowerCase();
+    const transactionHash = twoStepActivation && game.activation_tx_hash
+      ? game.activation_tx_hash
+      : game.registration_tx_hash;
     let receipt: unknown;
     try {
-      receipt = await readClient.getTransaction({ hash: game.registration_tx_hash });
+      receipt = await readClient.getTransaction({ hash: transactionHash });
     } catch (caught) {
       if (/not found|timed out/i.test(caught instanceof Error ? caught.message : String(caught))) return;
       throw caught;
     }
     if (!isTerminal(receipt)) return;
-    if (!hasGenuineConsensus(receipt)) {
+    if (!hasSuccessfulFinalizedExecution(receipt)) {
       await db.from("landmark_games").update({
         status: "error",
-        error_message: "The lobby could not be registered.",
+        error_message: twoStepActivation && game.activation_tx_hash
+          ? "The board could not start. Make a new lobby."
+          : "The lobby could not be registered.",
         updated_at: new Date().toISOString(),
       }).eq("id", game.id);
+      return;
+    }
+    if (twoStepActivation && !game.activation_tx_hash) {
+      const activationHash = await writeClient.writeContract({
+        address: gameContract(game),
+        functionName: "activate_game",
+        args: [game.contract_game_id],
+        leaderOnly: true,
+        value: 0n,
+      });
+      const { error } = await db.from("landmark_games").update({
+        activation_tx_hash: activationHash,
+        next_check_at: new Date(Date.now() + 3_000).toISOString(),
+      }).eq("id", game.id).eq("status", "registering");
+      if (error) throw error;
       return;
     }
     await scheduleRegisteredGame(db, game, readClient);
@@ -970,9 +1000,10 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
   const pendingRounds = (rounds as RoundRow[]).filter((round) => [
     "revealing", "revealed", "finalizing", "submitting", "pending",
   ].includes(round.status)).length;
-  const winner = currentGame.winner_player_id
+  const leadingPlayer = currentGame.winner_player_id
     ? board.find((entry) => entry.id === currentGame.winner_player_id) ?? null
     : null;
+  const winner = leadingPlayer && leadingPlayer.score > 0 ? leadingPlayer : null;
   const roundRecap = (rounds as RoundRow[])
     .filter((round) => (round.status === "settled" && round.correct_index !== null) || round.status === "void")
     .map((round) => {
@@ -1206,7 +1237,7 @@ async function startGame(
     const transactionHash = await writeClient.writeContract({
       address: V4_CONTRACT_ADDRESS as `0x${string}`,
       functionName: "register_game",
-      leaderOnly: false,
+      leaderOnly: true,
       args: [contractGameId, rosterText, planText],
       value: 0n,
     });

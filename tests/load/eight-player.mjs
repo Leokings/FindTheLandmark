@@ -42,7 +42,11 @@ async function confirmedAnswer(body) {
     try {
       return await gameRequest(body);
     } catch (error) {
-      if (!/^answer returned 503: Answer is still confirming onchain\./.test(String(error)) || attempt === 24) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      const retryable = /^answer returned 503: Answer is still confirming onchain\./.test(message)
+        || /^answer returned 50[234]:/.test(message)
+        || /fetch failed|timed out/i.test(message);
+      if (!retryable || attempt === 24) throw error;
       await sleep(4_000);
     }
   }
@@ -64,7 +68,8 @@ async function waitForState(session, predicate, label, timeoutMs) {
     try {
       latest = (await gameRequest({ action: "state", ...session })).data;
     } catch (error) {
-      if (!/^state returned 50[234]:/.test(String(error))) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/^state returned 50[234]:/.test(message)) throw error;
       transientStateFailures += 1;
       await sleep(3_000);
       continue;
@@ -126,7 +131,7 @@ let state = await waitForState(
   host.session,
   (value) => value.status === "running" && value.currentRound?.position === 0,
   "game registration",
-  180_000,
+  420_000,
 );
 
 for (let position = 0; position < 12; position += 1) {
@@ -202,6 +207,9 @@ if (results.settledRounds < 1 || results.settledRounds + results.voidRounds !== 
   throw new Error(`not every round resolved: ${JSON.stringify({ settledRounds: results.settledRounds, voidRounds: results.voidRounds, pendingRounds: results.pendingRounds })}`);
 }
 if (results.roundRecap?.length !== 12) throw new Error("round recap is incomplete");
+if (!results.leaderboard.some((entry) => entry.score > 0)) {
+  throw new Error("finalized game awarded no XP despite confirmed signed answers");
+}
 if (signedPlayers.size !== PLAYER_COUNT) {
   throw new Error(`not every player signed an answer: ${signedPlayers.size}/${PLAYER_COUNT}`);
 }

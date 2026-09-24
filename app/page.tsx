@@ -227,7 +227,7 @@ function RoundResults({ rounds }: { rounds: RoundRecap[] }) {
         {[...rounds].reverse().map((round) => (
           <li key={round.position}>
             <div><b>{String(round.position + 1).padStart(2, "0")}</b><strong>{round.question}</strong><span>{round.verdict === "right" ? `+${round.awardedXp} XP` : round.verdict === "wrong" ? "WRONG" : round.verdict === "not_counted" ? "NOT COUNTED" : round.verdict === "void" ? "NO VERDICT" : ""}</span></div>
-            <p>{round.correctAnswer ? `ANSWER · ${round.correctAnswer}` : "VALIDATORS COULD NOT AGREE · NO XP"}</p>
+            <p>{round.correctAnswer ? `ANSWER · ${round.correctAnswer}` : "COULDN'T VERIFY · NO XP"}</p>
             {round.sourceUrl && <a href={round.sourceUrl} target="_blank" rel="noreferrer">{round.sourceLabel ?? "CHECK SOURCE"} ↗</a>}
             {!round.sourceUrl && round.creditUrl && <a href={round.creditUrl} target="_blank" rel="noreferrer">PHOTO CREDIT ↗</a>}
           </li>
@@ -799,14 +799,15 @@ export default function Home() {
   }
 
   if (game.status === "finished") {
+    const winner = game.winner && game.winner.score > 0 ? game.winner : null;
     return (
       <main className="game-shell result-shell" id="top">
         <GameHeader code={game.code} onExit={leaveGame} />
         <section className="winner-panel">
-          <span>WINNER</span>
-          <h1>{game.winner?.displayName || "TIE GAME"}</h1>
-          <strong>{game.winner?.score ?? 0} XP</strong>
-          {game.voidRounds > 0 && <p className="status-tip">{game.voidRounds} ROUND{game.voidRounds === 1 ? "" : "S"} VOID · NO XP AWARDED</p>}
+          <span>{winner ? "WINNER" : "NO SCORE"}</span>
+          <h1>{winner?.displayName || "NO WINNER"}</h1>
+          <strong>{winner?.score ?? 0} XP</strong>
+          {game.voidRounds > 0 && <p className="status-tip">{game.voidRounds} ROUND{game.voidRounds === 1 ? "" : "S"} VOIDED{winner ? "" : " · NO XP AWARDED"}</p>}
           {game.lastResult && <LastResult result={game.lastResult} />}
           <div className="result-actions">
             <button type="button" className="primary-action" onClick={() => void rematch()} disabled={busy}>{busy ? "MAKING LOBBY…" : "REMATCH"}<i>↗</i></button>

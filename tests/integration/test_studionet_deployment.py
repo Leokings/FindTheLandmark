@@ -1,7 +1,7 @@
 from gltest import get_contract_factory
 
 
-CONTRACT_ADDRESS = "0xF5E1857c9B87246ABcB0c836FD64C1Da7451f9a6"
+CONTRACT_ADDRESS = "0x677388E350bef8FdfD41f8F8Dc13c558175f3C7F"
 
 
 def deployed_contract():
@@ -13,10 +13,10 @@ def test_deployed_lobby_policy_matches_release():
     policy = deployed_contract().get_policy().call()
 
     assert policy == {
-        "policy_version": "find-the-landmark.lobby-game.v4.2",
+        "policy_version": "find-the-landmark.lobby-game.v4.3",
         "max_players": 8,
         "max_rounds": 12,
-        "start_delay_ms": 120_000,
+        "start_delay_ms": 180_000,
         "scoring_scope": "per_game_only",
         "validator_consensus": True,
         "settlement_mode": "per_round",

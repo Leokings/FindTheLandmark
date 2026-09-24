@@ -23,7 +23,7 @@ UNESCO_URL = (
 )
 SALT_ONE = "11" * 32
 SALT_TWO = "22" * 32
-GAME_START = "2026-08-21T10:02:00Z"
+GAME_START = "2026-08-21T10:03:00Z"
 
 
 PLAN = [
@@ -105,11 +105,13 @@ def deploy_contract(direct_vm, direct_deploy, admin, relayer=None):
 
 
 def register(contract, players, game_id="game-one", plan=None):
-    return contract.register_game(
+    created = contract.register_game(
         game_id,
         json.dumps([address_text(player) for player in players]),
         json.dumps(plan or PLAN),
     )
+    activated = contract.activate_game(game_id)
+    return {**created, "start_ms": activated["start_ms"]}
 
 
 def commit(contract, direct_vm, sender, round_index, choice_index, salt, when):
@@ -159,9 +161,9 @@ def test_policy_uses_signed_commits_and_transaction_time(direct_vm, direct_deplo
     contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
     policy = contract.get_policy()
 
-    assert policy["policy_version"] == "find-the-landmark.lobby-game.v4.2"
+    assert policy["policy_version"] == "find-the-landmark.lobby-game.v4.3"
     assert policy["max_players"] == 8
-    assert policy["start_delay_ms"] == 120_000
+    assert policy["start_delay_ms"] == 180_000
     assert policy["answer_authentication"] == "direct_eoa_commitment"
     assert policy["timing_source"] == "genlayer_transaction_timestamp"
     assert policy["reveal_mode"] == "relayer_batch_with_player_fallback"
@@ -177,10 +179,38 @@ def test_registration_schedules_every_round_from_transaction_time(
     first = contract.get_round_window("game-one", 0)
     second = contract.get_round_window("game-one", 1)
 
-    assert created["start_ms"] == 1_787_306_520_000
+    assert created["start_ms"] == 1_787_306_580_000
     assert first["commit_deadline_ms"] - first["start_ms"] == 20_000
     assert second["start_ms"] - first["commit_deadline_ms"] == 5_000
     assert second["reveal_deadline_ms"] - second["commit_deadline_ms"] == 120_000
+
+
+def test_game_waits_for_relayer_activation_and_activation_is_idempotent(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
+    created = contract.register_game(
+        "game-one",
+        json.dumps([address_text(direct_alice), address_text(direct_bob)]),
+        json.dumps(PLAN),
+    )
+    assert created["start_ms"] == 0
+    with direct_vm.expect_revert("has not been activated"):
+        contract.get_round_window("game-one", 0)
+
+    direct_vm.sender = as_address(direct_bob)
+    with direct_vm.expect_revert("Only the configured game relayer can activate games"):
+        contract.activate_game("game-one")
+
+    direct_vm.sender = as_address(direct_alice)
+    direct_vm.warp("2026-08-21T10:01:00Z")
+    first = contract.activate_game("game-one")
+    direct_vm.warp("2026-08-21T10:02:00Z")
+    second = contract.activate_game("game-one")
+    assert first["start_ms"] == 1_787_306_640_000
+    assert first["duplicate"] is False
+    assert second["start_ms"] == first["start_ms"]
+    assert second["duplicate"] is True
 
 
 def test_only_relayer_can_register(direct_vm, direct_deploy, direct_alice, direct_bob):
@@ -222,16 +252,16 @@ def test_only_rostered_signer_can_commit_and_commit_is_idempotent(
     register(contract, [direct_alice, direct_bob])
 
     with direct_vm.expect_revert("Only a registered player"):
-        commit(contract, direct_vm, direct_charlie, 0, 1, SALT_ONE, "2026-08-21T10:02:02Z")
+        commit(contract, direct_vm, direct_charlie, 0, 1, SALT_ONE, "2026-08-21T10:03:02Z")
 
-    first = commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:02:02Z")
-    duplicate = commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:02:03Z")
+    first = commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:03:02Z")
+    duplicate = commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:03:03Z")
     assert first["duplicate"] is False
     assert duplicate["duplicate"] is True
     assert duplicate["committed_at_ms"] == first["committed_at_ms"]
 
     with direct_vm.expect_revert("already committed another answer"):
-        commit(contract, direct_vm, direct_alice, 0, 0, SALT_TWO, "2026-08-21T10:02:04Z")
+        commit(contract, direct_vm, direct_alice, 0, 0, SALT_TWO, "2026-08-21T10:03:04Z")
 
 
 def test_commit_window_uses_transaction_timestamp(
@@ -241,9 +271,9 @@ def test_commit_window_uses_transaction_timestamp(
     register(contract, [direct_alice, direct_bob])
 
     with direct_vm.expect_revert("has not started"):
-        commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:01:59Z")
+        commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:02:59Z")
     with direct_vm.expect_revert("round is closed"):
-        commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:02:21Z")
+        commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:03:21Z")
 
 
 def test_omitted_player_can_reveal_directly(
@@ -251,8 +281,8 @@ def test_omitted_player_can_reveal_directly(
 ):
     contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
     register(contract, [direct_alice, direct_bob])
-    commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:02:02Z")
-    commit(contract, direct_vm, direct_bob, 0, 1, SALT_TWO, "2026-08-21T10:02:10Z")
+    commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:03:02Z")
+    commit(contract, direct_vm, direct_bob, 0, 1, SALT_TWO, "2026-08-21T10:03:10Z")
 
     reveal_batch(
         contract,
@@ -260,7 +290,7 @@ def test_omitted_player_can_reveal_directly(
         direct_alice,
         0,
         [{"player_address": address_text(direct_alice), "choice_index": 1, "salt": SALT_ONE}],
-        "2026-08-21T10:02:21Z",
+        "2026-08-21T10:03:21Z",
     )
     bob_state = contract.get_answer_state("game-one", 0, address_text(direct_bob))
     assert bob_state["revealed"] is False
@@ -268,7 +298,7 @@ def test_omitted_player_can_reveal_directly(
     assert bob_state["committed_at_ms"] > 0
 
     direct_vm.sender = as_address(direct_bob)
-    direct_vm.warp("2026-08-21T10:02:30Z")
+    direct_vm.warp("2026-08-21T10:03:30Z")
     recovered = contract.reveal_answer("game-one", 0, 1, SALT_TWO)
     assert recovered["revealed"] is True
     assert contract.get_answer_state("game-one", 0, address_text(direct_bob))["revealed"] is True
@@ -279,7 +309,7 @@ def test_bad_reveal_cannot_change_signed_commitment(
 ):
     contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
     register(contract, [direct_alice, direct_bob])
-    commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:02:02Z")
+    commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:03:02Z")
 
     result = reveal_batch(
         contract,
@@ -287,7 +317,7 @@ def test_bad_reveal_cannot_change_signed_commitment(
         direct_alice,
         0,
         [{"player_address": address_text(direct_alice), "choice_index": 0, "salt": SALT_ONE}],
-        "2026-08-21T10:02:21Z",
+        "2026-08-21T10:03:21Z",
     )
     assert result["newly_revealed"] == 0
     assert contract.get_answer_state("game-one", 0, address_text(direct_alice))["revealed"] is False
@@ -302,8 +332,8 @@ def test_speed_xp_comes_from_commit_transaction_timestamp_and_finalize_is_idempo
 ):
     contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
     register(contract, [direct_alice, direct_bob])
-    commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:02:02Z")
-    commit(contract, direct_vm, direct_bob, 0, 1, SALT_TWO, "2026-08-21T10:02:10Z")
+    commit(contract, direct_vm, direct_alice, 0, 1, SALT_ONE, "2026-08-21T10:03:02Z")
+    commit(contract, direct_vm, direct_bob, 0, 1, SALT_TWO, "2026-08-21T10:03:10Z")
     reveal_batch(
         contract,
         direct_vm,
@@ -313,12 +343,12 @@ def test_speed_xp_comes_from_commit_transaction_timestamp_and_finalize_is_idempo
             {"player_address": address_text(direct_alice), "choice_index": 1, "salt": SALT_ONE},
             {"player_address": address_text(direct_bob), "choice_index": 1, "salt": SALT_TWO},
         ],
-        "2026-08-21T10:02:21Z",
+        "2026-08-21T10:03:21Z",
     )
     mock_image(direct_vm)
     mock_identify(direct_vm)
     direct_vm.sender = as_address(direct_bob)
-    direct_vm.warp("2026-08-21T10:04:21Z")
+    direct_vm.warp("2026-08-21T10:05:21Z")
     result = contract.finalize_round("game-one", 0)
 
     scores = {row["player_address"]: row for row in result["scores"]}
@@ -339,7 +369,7 @@ def test_anyone_can_finalize_but_not_before_reveal_deadline(
     contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
     register(contract, [direct_alice, direct_bob])
     direct_vm.sender = as_address(direct_bob)
-    direct_vm.warp("2026-08-21T10:04:19Z")
+    direct_vm.warp("2026-08-21T10:05:19Z")
     with direct_vm.expect_revert("not ready to finalize"):
         contract.finalize_round("game-one", 0)
 
@@ -349,18 +379,18 @@ def test_quiz_is_fetched_from_authoritative_source_by_leader_and_validator(
 ):
     contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
     register(contract, [direct_alice, direct_bob])
-    commit(contract, direct_vm, direct_alice, 2, 1, SALT_ONE, "2026-08-21T10:02:57Z")
+    commit(contract, direct_vm, direct_alice, 2, 1, SALT_ONE, "2026-08-21T10:03:57Z")
     reveal_batch(
         contract,
         direct_vm,
         direct_alice,
         2,
         [{"player_address": address_text(direct_alice), "choice_index": 1, "salt": SALT_ONE}],
-        "2026-08-21T10:03:21Z",
+        "2026-08-21T10:04:21Z",
     )
     mock_source(direct_vm, DOCS_URL, DOCS_BYTES)
     mock_pick(direct_vm, 1)
-    direct_vm.warp("2026-08-21T10:05:21Z")
+    direct_vm.warp("2026-08-21T10:06:21Z")
     result = contract.finalize_round("game-one", 2)
     assert result["source_sha256"] == DOCS_HASH
     assert result["scores"][0]["awarded_xp"] > 75
@@ -382,14 +412,14 @@ def test_eight_signed_players_can_commit_reveal_and_score_once(
     reveals = []
     for index, player in enumerate(players):
         salt = f"{index + 1:064x}"
-        commit(contract, direct_vm, player, 0, 1, salt, "2026-08-21T10:02:05Z")
+        commit(contract, direct_vm, player, 0, 1, salt, "2026-08-21T10:03:05Z")
         reveals.append({"player_address": address_text(player), "choice_index": 1, "salt": salt})
     reveal_batch(
-        contract, direct_vm, direct_alice, 0, reveals, "2026-08-21T10:02:21Z"
+        contract, direct_vm, direct_alice, 0, reveals, "2026-08-21T10:03:21Z"
     )
     mock_image(direct_vm)
     mock_identify(direct_vm)
-    direct_vm.warp("2026-08-21T10:04:21Z")
+    direct_vm.warp("2026-08-21T10:05:21Z")
     result = contract.finalize_round("game-one", 0)
 
     assert len(result["scores"]) == 8

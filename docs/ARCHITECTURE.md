@@ -6,7 +6,7 @@
 - Each player locks a salted answer commitment with a temporary in-browser GenLayer signer.
 - Deterministic commitments and reveals use StudioNet's fast path; only validator consensus can award XP.
 - A player can reveal directly if the batch relayer omits their answer, and anyone can finalize an expired round.
-- The registration transaction schedules a two-minute start buffer; each answer window lasts one minute. The backend checks the signed commitment receipt and onchain timestamp before confirming an answer.
+- After the board registration finalizes, a separate onchain activation starts a three-minute buffer; each answer window lasts one minute. The backend checks the exact commitment and timestamp in finalized contract state before confirming an answer.
 - Each image and its SHA-256 hash are committed in the game plan before play starts.
 - Quiz validators fetch one record from UNESCO's official World Heritage DataHub API or a pinned GenLayer Docs source.
 - Speed XP uses the GenLayer commitment transaction timestamp.
