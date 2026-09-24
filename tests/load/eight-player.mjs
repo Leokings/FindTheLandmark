@@ -9,8 +9,8 @@ const signedPlayers = new Set();
 let transientStateFailures = 0;
 let transientJoinFailures = 0;
 const PLAYER_COUNT = Number(process.argv[3] ?? process.env.LOAD_PLAYERS ?? 8);
-if (!Number.isInteger(PLAYER_COUNT) || PLAYER_COUNT < 2 || PLAYER_COUNT > 50) {
-  throw new Error("LOAD_PLAYERS must be an integer from 2 to 50.");
+if (!Number.isInteger(PLAYER_COUNT) || PLAYER_COUNT < 2 || PLAYER_COUNT > 30) {
+  throw new Error("LOAD_PLAYERS must be an integer from 2 to 30.");
 }
 // Limit the submission burst without reducing how many players answer each round.
 const SIGNED_WRITE_BATCH_SIZE = 8;
@@ -179,7 +179,7 @@ if (!/already joined/i.test(hijack.data.error ?? "")) {
   throw new Error("A different token replaced an admitted player's session.");
 }
 
-if (PLAYER_COUNT === 50) {
+if (PLAYER_COUNT === 30) {
   const overflow = await gameRequest({
     action: "join",
     code,
@@ -189,7 +189,7 @@ if (PLAYER_COUNT === 50) {
     signerAddress: createGameSigner().address,
   }, [409]);
   if (!/full/i.test(overflow.data.error ?? "")) {
-    throw new Error(`Player 51 was not rejected as full: ${JSON.stringify(overflow.data)}`);
+    throw new Error(`Player 31 was not rejected as full: ${JSON.stringify(overflow.data)}`);
   }
 }
 
@@ -281,8 +281,8 @@ if (results.status !== "finished" || results.leaderboard?.length !== PLAYER_COUN
 if (results.settledRounds < 1 || results.settledRounds + results.voidRounds !== 12 || results.pendingRounds !== 0) {
   throw new Error(`not every round resolved: ${JSON.stringify({ settledRounds: results.settledRounds, voidRounds: results.voidRounds, pendingRounds: results.pendingRounds })}`);
 }
-if (PLAYER_COUNT === 50 && (results.settledRounds !== 12 || results.voidRounds !== 0)) {
-  throw new Error(`Fifty-player match did not settle all rounds: ${results.settledRounds} settled, ${results.voidRounds} void`);
+if (PLAYER_COUNT === 30 && (results.settledRounds !== 12 || results.voidRounds !== 0)) {
+  throw new Error(`Thirty-player match did not settle all rounds: ${results.settledRounds} settled, ${results.voidRounds} void`);
 }
 if (results.roundRecap?.length !== 12) throw new Error("round recap is incomplete");
 if (!results.leaderboard.some((entry) => entry.score > 0)) {
@@ -291,7 +291,7 @@ if (!results.leaderboard.some((entry) => entry.score > 0)) {
 if (signedPlayers.size !== PLAYER_COUNT) {
   throw new Error(`not every player signed an answer: ${signedPlayers.size}/${PLAYER_COUNT}`);
 }
-if (PLAYER_COUNT === 50) {
+if (PLAYER_COUNT === 30) {
   const [{ createClient }, { studionet }] = await Promise.all([
     import("genlayer-js"),
     import("genlayer-js/chains"),
@@ -326,7 +326,7 @@ console.log(JSON.stringify({
   voidRounds: results.voidRounds,
   pendingRounds: results.pendingRounds,
   winner: results.winner,
-  overflowRejected: PLAYER_COUNT === 50,
+  overflowRejected: PLAYER_COUNT === 30,
   signedPlayersExercised: signedPlayers.size,
   answersPerRound: ACTIVE_PLAYERS_PER_ROUND,
   resultsLookup: true,

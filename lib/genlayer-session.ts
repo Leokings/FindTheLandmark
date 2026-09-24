@@ -68,19 +68,22 @@ function friendlyStudioWriteError(caught: unknown) {
 
 export function isRetryableStudioWriteError(caught: unknown) {
   const message = caught instanceof Error ? caught.message : String(caught);
-  return /unexpected token '<'|not valid JSON|fetch failed|econnreset|etimedout|socket hang up|bad gateway|service unavailable|gateway timeout|\b50[234]\b/i
+  return /rate limit exceeded|unexpected token '<'|not valid JSON|fetch failed|econnreset|etimedout|socket hang up|bad gateway|service unavailable|gateway timeout|\b50[234]\b/i
     .test(message);
 }
 
 async function studioWrite<T>(operation: () => Promise<T>) {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
     try {
       return await operation();
     } catch (caught) {
       lastError = caught;
-      if (!isRetryableStudioWriteError(caught) || attempt === 3) break;
-      const backoffMs = 350 * (2 ** attempt) + Math.floor(Math.random() * 200);
+      const rateLimited = /rate limit exceeded/i.test(caught instanceof Error ? caught.message : String(caught));
+      if (!isRetryableStudioWriteError(caught) || attempt === 5 || (!rateLimited && attempt === 3)) break;
+      const backoffMs = rateLimited
+        ? Math.min(20_000, 4_000 * (attempt + 1))
+        : 350 * (2 ** attempt) + Math.floor(Math.random() * 200);
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
     }
   }

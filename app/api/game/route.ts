@@ -188,7 +188,7 @@ export async function POST(request: Request) {
     : 8_000;
   if (input.action === "state" || input.action === "results") {
     // These reads are safe to retry. A stalled network hop must not consume
-    // most of a 60-second answer window before the player sees the next round.
+    // most of a 90-second answer window before the player sees the next round.
     const first = await forwardSigned(body, timeout);
     if (first.status !== 502 && first.status !== 504) return first;
     return forwardSigned(body, timeout);

@@ -1,12 +1,12 @@
 # Architecture
 
 - Supabase stores lobby membership, shared rounds, answers, and the per-game board.
-- The host starts a twelve-round game for 2–50 players and chooses World Tour, Landmarks, or GenLayer Lab.
+- The host starts a twelve-round game for 2–30 players and chooses World Tour, Landmarks, or GenLayer Lab.
 - Everyone in the lobby gets the same image and/or sourced quiz rounds from the chosen pack.
 - Each player locks a salted answer commitment with a temporary in-browser GenLayer signer.
 - Deterministic commitments and reveals use StudioNet's fast path; only validator consensus can award XP.
 - A player can reveal directly if the batch relayer omits their answer, and anyone can finalize an expired round.
-- After the board registration finalizes, a separate onchain activation starts a three-minute buffer; each answer window lasts one minute. The backend checks the exact commitment and timestamp in finalized contract state before confirming an answer.
+- After the board registration finalizes, a separate onchain activation starts a three-minute buffer; each answer window lasts 90 seconds, followed by a 90-second intermission to drain StudioNet's pending-transaction queue. The backend checks the exact commitment and timestamp in finalized contract state before confirming an answer.
 - Each image and its SHA-256 hash are committed in the game plan before play starts.
 - Quiz validators fetch one record from UNESCO's official World Heritage DataHub API or a pinned GenLayer Docs source.
 - Speed XP uses the GenLayer commitment transaction timestamp.

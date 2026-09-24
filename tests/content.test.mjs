@@ -30,6 +30,7 @@ test("game plans contain twelve rounds and seven authoritative-source quizzes", 
     assert.equal(plan.filter((round) => round.kind === "identify").length, 5);
     assert.equal(atlasRounds.length, 3);
     assert.equal(docsRounds.length, 4);
+    assert.ok(plan.every((round) => round.durationMs === 90_000));
     assert.ok(atlasRounds.every((round) => !round.sourceSha256));
     assert.ok(atlasRounds.every((round) => round.sourceUrl?.endsWith("&limit=1")));
     assert.ok(docsRounds.every((round) => /^[a-f0-9]{64}$/.test(round.sourceSha256 ?? "")));
@@ -64,7 +65,7 @@ test("themed packs remain twelve distinct rounds with verifiable sources", () =>
     const plan = createGamePlan(pack);
     assert.equal(plan.length, 12);
     assert.equal(new Set(plan.map((round) => round.challengeId)).size, 12);
-    assert.ok(plan.every((round) => round.durationMs === 60_000));
+    assert.ok(plan.every((round) => round.durationMs === 90_000));
     assert.equal(plan.filter((round) => round.kind === "identify").length, expected.identify);
     assert.equal(plan.filter((round) => round.city === "Atlas quiz").length, expected.atlas);
     assert.equal(plan.filter((round) => round.city === "GenLayer docs").length, expected.docs);

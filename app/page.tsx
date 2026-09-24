@@ -108,6 +108,7 @@ type GameState = {
   lastResult: { position: number; verdict: "right" | "wrong" | "not_counted"; awardedXp: number } | null;
   roundRecap: RoundRecap[];
   currentRound: RoundState | null;
+  nextRoundStartsAt: string | null;
   leaderboard: LeaderboardEntry[];
   winner: LeaderboardEntry | null;
   error: string | null;
@@ -759,10 +760,10 @@ export default function Home() {
         </header>
 
         <section className="home-title">
-          <p>LOBBY GAME · 50 MAX</p>
+          <p>LOBBY GAME · 30 MAX</p>
           <h1>TEST<br />YOUR<br /><em>METTLE.</em></h1>
           <div className="home-stats" aria-label="Game format">
-            <span><b>50</b> PLAYERS</span>
+            <span><b>30</b> PLAYERS</span>
             <span><b>12</b> ROUNDS</span>
             <span><b>00</b> START XP</span>
           </div>
@@ -900,6 +901,28 @@ export default function Home() {
           {error && <p className="form-error" role="alert">{error}</p>}
         </section>
         <div className="result-details"><Board entries={game.leaderboard} full /><RoundResults rounds={game.roundRecap} /></div>
+      </main>
+    );
+  }
+
+  if (
+    game.status === "running"
+    && game.currentRound
+    && game.nextRoundStartsAt
+    && now >= Date.parse(game.currentRound.endsAt)
+    && now < Date.parse(game.nextRoundStartsAt)
+  ) {
+    const nextIn = Math.max(0, Math.ceil((Date.parse(game.nextRoundStartsAt) - now) / 1_000));
+    return (
+      <main className="game-shell status-shell" id="top">
+        <GameHeader code={game.code} onExit={leaveGame} />
+        <section className="status-poster">
+          <span>{String(game.currentRoundIndex + 1).padStart(2, "0")}/{String(game.roundCount).padStart(2, "0")}</span>
+          <h1>NEXT<br />ROUND</h1>
+          <p className="status-tip">IN {Math.floor(nextIn / 60)}:{String(nextIn % 60).padStart(2, "0")}</p>
+          {game.lastResult && <LastResult result={game.lastResult} />}
+        </section>
+        <div className="status-details"><Board entries={game.leaderboard} /><RoundResults rounds={game.roundRecap} /></div>
       </main>
     );
   }

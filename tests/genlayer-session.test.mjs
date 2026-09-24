@@ -9,9 +9,10 @@ import {
   savePendingAnswer,
 } from "../lib/genlayer-session.ts";
 
-test("retries transient StudioNet gateway responses only", () => {
+test("retries transient StudioNet gateway and rate-limit responses only", () => {
   assert.equal(isRetryableStudioWriteError(new Error("Unexpected token '<', <!DOCTYPE is not valid JSON")), true);
   assert.equal(isRetryableStudioWriteError(new Error("503 Service Unavailable")), true);
+  assert.equal(isRetryableStudioWriteError(new Error("Rate limit exceeded: 30 requests per minute")), true);
   assert.equal(isRetryableStudioWriteError(new Error("Player already committed another answer")), false);
 });
 

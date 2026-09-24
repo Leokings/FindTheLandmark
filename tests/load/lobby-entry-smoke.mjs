@@ -62,7 +62,7 @@ const state = await request({
   playerId: join.playerId,
   playerToken: guestToken,
 });
-if (state.playerCount !== 2 || state.leaderboard.length !== 2 || state.maxPlayers !== 50) {
+if (state.playerCount !== 2 || state.leaderboard.length !== 2 || state.maxPlayers !== 30) {
   throw new Error(`Wrong lobby state after idempotent joins: ${JSON.stringify(state)}`);
 }
 

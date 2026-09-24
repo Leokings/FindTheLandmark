@@ -25,9 +25,13 @@ const magickWasm = await Deno.readFile(
 );
 await initializeImageMagick(magickWasm);
 
-const V4_CONTRACT_ADDRESS = "0x219f4011bB42BEf4BEbb5aF46dfe69F7bE2eDd5c";
+const CURRENT_CONTRACT_ADDRESS = "0xCbE0103e51B33E665C3CdDa9dE1B6187ac941841";
+const RECENT_CONTRACT_ADDRESS = "0x93Cad018ECC6567c0A9056d51D9b2B637f2F658B";
+const PREVIOUS_CONTRACT_ADDRESS = "0x219f4011bB42BEf4BEbb5aF46dfe69F7bE2eDd5c";
 const TWO_STEP_ACTIVATION_CONTRACTS = new Set([
-  V4_CONTRACT_ADDRESS.toLowerCase(),
+  CURRENT_CONTRACT_ADDRESS.toLowerCase(),
+  RECENT_CONTRACT_ADDRESS.toLowerCase(),
+  PREVIOUS_CONTRACT_ADDRESS.toLowerCase(),
   "0x677388E350bef8FdfD41f8F8Dc13c558175f3C7F".toLowerCase(),
 ]);
 const EXPECTED_RELAYER = "0x7f07ab481dd8b57085d7c9e0c97c6126ee7faaec";
@@ -428,7 +432,7 @@ function numericMillis(value: unknown, label: string) {
 }
 
 function gameContract(game: GameRow) {
-  const address = game.contract_address ?? (game.contract_version === "v4" ? V4_CONTRACT_ADDRESS : null);
+  const address = game.contract_address ?? (game.contract_version === "v4" ? PREVIOUS_CONTRACT_ADDRESS : null);
   if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) throw new Error("Game contract is missing.");
   return address as `0x${string}`;
 }
@@ -1050,6 +1054,9 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
     lastResult,
     roundRecap,
     currentRound,
+    nextRoundStartsAt: currentGame.status === "running"
+      ? (rounds as RoundRow[]).find((round) => round.position === currentGame.current_round + 1)?.started_at ?? null
+      : null,
     leaderboard: board,
     winner,
     error: currentGame.error_message,
@@ -1131,7 +1138,7 @@ async function createLobby(db: DatabaseClient, body: Record<string, unknown>) {
         code,
         host_player_key: playerKey,
         contract_version: "v4",
-        contract_address: V4_CONTRACT_ADDRESS,
+        contract_address: CURRENT_CONTRACT_ADDRESS,
         pack,
       })
       .select("*")
@@ -1259,6 +1266,7 @@ async function startGame(
   const planText = JSON.stringify(onchainPlan);
   const rosterText = JSON.stringify((players as PlayerRow[]).map((entry) => entry.signer_address));
 
+  const contractAddress = gameContract(game);
   const { data: claimedGame, error: gameError } = await db
     .from("landmark_games")
     .update({
@@ -1267,7 +1275,7 @@ async function startGame(
       plan_hash: await sha256Hex(planText),
       contract_game_id: contractGameId,
       contract_version: "v4",
-      contract_address: V4_CONTRACT_ADDRESS,
+      contract_address: contractAddress,
       round_count: plan.length,
       next_check_at: new Date(Date.now() + 4_000).toISOString(),
       updated_at: new Date().toISOString(),
@@ -1298,13 +1306,26 @@ async function startGame(
 
   try {
     const { writeClient } = await genlayerClients();
-    const transactionHash = await writeClient.writeContract({
-      address: V4_CONTRACT_ADDRESS as `0x${string}`,
-      functionName: "register_game",
-      leaderOnly: true,
-      args: [contractGameId, rosterText, planText],
-      value: 0n,
-    });
+    let transactionHash = "";
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        transactionHash = await writeClient.writeContract({
+          address: contractAddress,
+          functionName: "register_game",
+          leaderOnly: true,
+          args: [contractGameId, rosterText, planText],
+          value: 0n,
+        });
+        break;
+      } catch (caught) {
+        // Studio occasionally returns an HTML gateway page before it can
+        // produce a transaction hash. Retry that transport failure only.
+        const message = caught instanceof Error ? caught.message : String(caught);
+        if (attempt === 2 || !/unexpected token '<'|not valid JSON/i.test(message)) throw caught;
+        await new Promise((resolve) => setTimeout(resolve, 2_000 * (attempt + 1)));
+      }
+    }
+    if (!transactionHash) throw new Error("StudioNet did not return a registration transaction.");
     const { error } = await db.from("landmark_games").update({
       registration_tx_hash: transactionHash,
       next_check_at: new Date(Date.now() + 3_000).toISOString(),

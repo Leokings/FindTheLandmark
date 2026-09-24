@@ -1,2 +1,2 @@
-process.env.LOAD_PLAYERS = "50";
+process.env.LOAD_PLAYERS = "30";
 await import("./eight-player.mjs");
