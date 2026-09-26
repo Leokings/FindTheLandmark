@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from gltest.direct.sdk_loader import setup_sdk_paths
@@ -425,6 +426,66 @@ def test_thirty_signed_players_can_commit_reveal_and_score_once(
     assert len(result["scores"]) == 30
     assert all(row["awarded_xp"] == 137 for row in result["scores"])
     assert len(contract.get_leaderboard("game-one")) == 30
+
+
+def test_thirty_players_complete_twelve_rounds_with_final_xp(
+    direct_vm, direct_deploy, direct_alice
+):
+    def at(milliseconds):
+        return datetime.fromtimestamp(milliseconds / 1000, timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+    contract = deploy_contract(direct_vm, direct_deploy, direct_alice)
+    from genlayer.py.types import Address
+
+    players = [Address(f"0x{index + 1:040x}") for index in range(30)]
+    plan = [
+        {**PLAN[0], "challenge_id": f"quick-taj-{position:02d}"}
+        for position in range(12)
+    ]
+    register(contract, players, plan=plan)
+
+    for position in range(12):
+        window = contract.get_round_window("game-one", position)
+        reveals = []
+        for index, player in enumerate(players):
+            salt = f"{position * len(players) + index + 1:064x}"
+            commit(
+                contract,
+                direct_vm,
+                player,
+                position,
+                1,
+                salt,
+                at(window["start_ms"] + 5_000),
+            )
+            reveals.append({
+                "player_address": address_text(player),
+                "choice_index": 1,
+                "salt": salt,
+            })
+        reveal_batch(
+            contract,
+            direct_vm,
+            direct_alice,
+            position,
+            reveals,
+            at(window["commit_deadline_ms"] + 1_000),
+        )
+
+    mock_image(direct_vm)
+    mock_identify(direct_vm)
+    direct_vm.warp(at(window["finalize_after_ms"] + 1_000))
+    for position in range(12):
+        direct_vm.sender = as_address(direct_alice)
+        result = contract.finalize_round("game-one", position)
+        assert len(result["scores"]) == 30
+        assert all(row["awarded_xp"] == 137 for row in result["scores"])
+
+    leaderboard = contract.get_leaderboard("game-one")
+    assert len(leaderboard) == 30
+    assert all(row["score"] == 12 * 137 for row in leaderboard)
 
 
 def test_thirty_first_player_is_rejected(direct_vm, direct_deploy, direct_alice):

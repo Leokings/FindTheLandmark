@@ -8,8 +8,10 @@
 - New rooms have 30 seats, 90-second answer windows, and 90-second intermissions. Existing rooms keep their original cap and contract address.
 - Room `MW2L4C`: create/join retries preserved the same sessions; duplicate concurrent joins did not add a player; a different token could not take over the guest session.
 - Room `R9PALQ`: 30 players joined and all 30 submitted signed commitments in each of the first three rounds. The cumulative load runs then hit StudioNet's shared `500 requests per hour` limit; this is **not** a completed 30-player match. The synthetic room was stopped.
+- Room `JJPA27`: 30 players sent signed commitments in each of the first five rounds. The long live test was stopped at the owner's request; this is **not** a completed match.
 - The earlier 30-player room `VEF23R` reached six 30-answer rounds before StudioNet reported 51 pending transactions against its per-contract limit of 50. The longer intermission in v4.6 targets this backlog; a complete run remains to be verified.
-- Build, lint, contract lint, 15 direct contract tests, the StudioNet deployment policy test, and 24 app tests pass. A completed 30-active-player match is **not yet verified**.
+- Fast direct-mode simulation: 30 players completed all 12 contract rounds (360 commitments, 12 batch reveals and finalizations). All 30 finished with 1,644 XP. This uses simulated time and mocked image validation, so it does **not** test StudioNet throughput or validator consensus.
+- Build, lint, contract lint, 16 direct contract tests, the StudioNet deployment policy test, and 24 app tests pass. A completed 30-active-player StudioNet match is **not yet verified**.
 
 ## Previous release: 50-seat lobby
 
