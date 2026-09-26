@@ -6,12 +6,14 @@
 - [Live app](https://find-the-landmark.vercel.app/)
 - [StudioNet contract](https://explorer-studio.genlayer.com/address/0xCbE0103e51B33E665C3CdDa9dE1B6187ac941841) (`find-the-landmark.lobby-game.v4.6`)
 - New rooms have 30 seats, 90-second answer windows, and 90-second intermissions. Existing rooms keep their original cap and contract address.
+- 2026-09-26 [completed 30-player match `WMSESY`](https://find-the-landmark.vercel.app/?results=WMSESY): all 30 players sent and confirmed signed commitments in all 12 rounds. Eleven rounds settled; round 11 was void after three `MAJORITY_DISAGREE` validator attempts. Each settled round recorded 30 onchain scores.
+- The finished app and finalized onchain leaderboards each contain 30 players and 9,248 total XP. Winner: Load 01 with 555 XP. Near round 10, StudioNet briefly returned its 30-requests-per-minute limit; all 30 commitments eventually landed, but that burst took 79 seconds of the 90-second window.
 - Room `MW2L4C`: create/join retries preserved the same sessions; duplicate concurrent joins did not add a player; a different token could not take over the guest session.
 - Room `R9PALQ`: 30 players joined and all 30 submitted signed commitments in each of the first three rounds. The cumulative load runs then hit StudioNet's shared `500 requests per hour` limit; this is **not** a completed 30-player match. The synthetic room was stopped.
 - Room `JJPA27`: 30 players sent signed commitments in each of the first five rounds. The long live test was stopped at the owner's request; this is **not** a completed match.
-- The earlier 30-player room `VEF23R` reached six 30-answer rounds before StudioNet reported 51 pending transactions against its per-contract limit of 50. The longer intermission in v4.6 targets this backlog; a complete run remains to be verified.
+- The earlier 30-player room `VEF23R` reached six 30-answer rounds before StudioNet reported 51 pending transactions against its per-contract limit of 50. The longer intermission in v4.6 avoided this failure in `WMSESY`.
 - Fast direct-mode simulation: 30 players completed all 12 contract rounds (360 commitments, 12 batch reveals and finalizations). All 30 finished with 1,644 XP. This uses simulated time and mocked image validation, so it does **not** test StudioNet throughput or validator consensus.
-- Build, lint, contract lint, 16 direct contract tests, the StudioNet deployment policy test, and 24 app tests pass. A completed 30-active-player StudioNet match is **not yet verified**.
+- Build, lint, contract lint, 16 direct contract tests, the StudioNet deployment policy test, and 24 app tests pass. A 30-active-player StudioNet match is verified, but a clean 12/12 round settlement is **not**: one factual quiz round voided.
 
 ## Previous release: 50-seat lobby
 
