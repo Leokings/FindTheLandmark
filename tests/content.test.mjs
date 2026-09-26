@@ -5,6 +5,7 @@ import {
   CONTENT_POOL_COUNTS,
   contractPlan,
   createGamePlan,
+  genLayerQuizBank,
 } from "../supabase/functions/landmark-api/content.ts";
 
 test("content pool contains sixty reusable questions", () => {
@@ -14,6 +15,22 @@ test("content pool contains sixty reusable questions", () => {
     genLayerDocs: 15,
     total: 60,
   });
+});
+
+test("decorator quizzes cite the pinned page that defines both answers", () => {
+  const expectedAnswers = new Map([
+    ["genlayer-view-decorator-001", "@gl.public.view"],
+    ["genlayer-payable-decorator-001", "@gl.public.write.payable"],
+  ]);
+  const rounds = genLayerQuizBank.filter((round) => expectedAnswers.has(round.challengeId));
+
+  assert.equal(rounds.length, expectedAnswers.size);
+  for (const round of rounds) {
+    assert.ok(round.options.includes(expectedAnswers.get(round.challengeId)));
+    assert.equal(round.sourceLabel, "GenLayer Docs · Introduction");
+    assert.ok(round.sourceUrl?.endsWith("/developers/intelligent-contracts/introduction.mdx"));
+    assert.equal(round.sourceSha256, "95f3ecb0c05465f3d525d7ea7406d228ad462960b83a3ecb168b19c57c64a30f");
+  }
 });
 
 test("game plans contain twelve rounds and seven authoritative-source quizzes", () => {

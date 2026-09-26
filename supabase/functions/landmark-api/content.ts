@@ -372,7 +372,7 @@ const quizBank: readonly GameRound[] = [
   },
 ];
 
-const genLayerQuizBank: readonly GameRound[] = [
+export const genLayerQuizBank: readonly GameRound[] = [
   {
     kind: "quiz", challengeId: "genlayer-exec-prompt-001", question: "Which GenLayer function sends a prompt to an LLM?",
     options: ["gl.nondet.web.get()", "gl.nondet.exec_prompt()", "gl.vm.run_nondet_unsafe()", "gl.public.write"],
@@ -407,13 +407,13 @@ const genLayerQuizBank: readonly GameRound[] = [
     kind: "quiz", challengeId: "genlayer-view-decorator-001", question: "Which decorator marks a read-only Intelligent Contract method?",
     options: ["@gl.public.view", "@gl.public.write", "@gl.public.write.payable", "@gl.contract_interface"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Public methods", city: "GenLayer docs",
-    ...genLayerSource("Features overview", "developers/intelligent-contracts/features.mdx", "cb20bd015db1957afd6f93fa719cc07013b6778734621cd40bc825f2af31417f"),
+    ...genLayerSource("Introduction", "developers/intelligent-contracts/introduction.mdx", "95f3ecb0c05465f3d525d7ea7406d228ad462960b83a3ecb168b19c57c64a30f"),
   },
   {
     kind: "quiz", challengeId: "genlayer-payable-decorator-001", question: "Which decorator marks a public method that can modify state and receive value?",
     options: ["@gl.public.write.payable", "@gl.public.view", "@gl.public.write", "@gl.nondet"],
     durationMs: 25_000, rewardXp: 75, speedBonus: 25, place: "Public methods", city: "GenLayer docs",
-    ...genLayerSource("Features overview", "developers/intelligent-contracts/features.mdx", "cb20bd015db1957afd6f93fa719cc07013b6778734621cd40bc825f2af31417f"),
+    ...genLayerSource("Introduction", "developers/intelligent-contracts/introduction.mdx", "95f3ecb0c05465f3d525d7ea7406d228ad462960b83a3ecb168b19c57c64a30f"),
   },
   {
     kind: "quiz", challengeId: "genlayer-equivalence-purpose-001", question: "What is the Equivalence Principle used for?",

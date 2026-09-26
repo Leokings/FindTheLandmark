@@ -9,7 +9,7 @@ const expectedByPath = new Map(matches.map((match) => [match[1], match[2]]));
 const unescoCalls = [...source.matchAll(/unescoSource\("[^"]+",\s*(\d+)\)/g)];
 const unescoIds = new Set(unescoCalls.map((match) => Number(match[1])));
 
-assert.equal(expectedByPath.size, 8, "expected eight distinct pinned GenLayer Docs sources");
+assert.equal(expectedByPath.size, 7, "expected seven distinct pinned GenLayer Docs sources");
 assert.equal(unescoCalls.length, 15, "expected fifteen UNESCO-backed atlas questions");
 assert.equal(unescoIds.size, 12, "expected twelve distinct UNESCO DataHub records");
 
@@ -17,8 +17,14 @@ for (const [path, expected] of expectedByPath) {
   const url = `https://raw.githubusercontent.com/genlayerlabs/genlayer-docs/${commit}/pages/${path}`;
   const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
   assert.equal(response.ok, true, `${url} returned ${response.status}`);
-  const actual = createHash("sha256").update(Buffer.from(await response.arrayBuffer())).digest("hex");
+  const body = Buffer.from(await response.arrayBuffer());
+  const actual = createHash("sha256").update(body).digest("hex");
   assert.equal(actual, expected, `${path} hash drifted`);
+  if (path === "developers/intelligent-contracts/introduction.mdx") {
+    const introduction = body.toString("utf8");
+    assert.match(introduction, /`@gl\.public\.view`:\s*Read-only methods/);
+    assert.match(introduction, /`@gl\.public\.write\.payable`:\s*Methods that can modify contract state \*and\* receive `value`/);
+  }
 }
 
 for (const id of unescoIds) {
