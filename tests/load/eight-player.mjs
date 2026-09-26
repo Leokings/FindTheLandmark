@@ -193,6 +193,11 @@ if (PLAYER_COUNT === 30) {
   }
 }
 
+if (process.env.LOAD_WAIT_FOR_START === "1") {
+  console.log("Players joined. Waiting for Enter before starting the isolated match.");
+  await new Promise((resolve) => process.stdin.once("data", resolve));
+}
+
 await gameRequest({ action: "start", ...host.session });
 let state = await waitForState(
   host.session,
@@ -317,7 +322,7 @@ const timingSummary = Object.fromEntries([...timings].map(([action, values]) => 
   maxMs: Math.max(...values),
 }]));
 
-console.log(JSON.stringify({
+const summary = JSON.stringify({
   baseUrl,
   code,
   players: results.leaderboard.length,
@@ -333,4 +338,8 @@ console.log(JSON.stringify({
   transientStateFailures,
   transientJoinFailures,
   timings: timingSummary,
-}, null, 2));
+}, null, 2);
+await new Promise((resolve, reject) => {
+  process.stdout.write(`${summary}\n`, (error) => (error ? reject(error) : resolve()));
+});
+process.exit(0);
