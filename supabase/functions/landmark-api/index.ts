@@ -15,6 +15,7 @@ import {
   hasGenuineConsensus,
   hasSuccessfulFinalizedExecution,
   isTerminal,
+  revealExecutionCounts,
   signedCommitResult,
   signedCommitStateResult,
   statusName,
@@ -592,9 +593,9 @@ async function sendRevealBatch(
 }
 
 async function submitDueReveal(db: DatabaseClient, game: GameRow, writeClient: GenLayerWriteClient) {
-  // Commit transactions can be submitted before the cutoff but reach the API
-  // a few seconds later. Keep most of the two-minute reveal window available.
-  const dueAt = new Date(Date.now() - 35_000).toISOString();
+  // Signed answer details are staged before finality checks. Reveal early
+  // enough to leave room for a supplemental batch if some commits lag.
+  const dueAt = new Date(Date.now() - 10_000).toISOString();
   const { data: due, error } = await db.from("landmark_game_rounds")
     .select("*")
     .eq("game_id", game.id)
@@ -652,10 +653,14 @@ async function checkRevealReceipt(db: DatabaseClient, game: GameRow, readClient:
   }
   if (!isTerminal(receipt)) return;
   if (hasSuccessfulFinalizedExecution(receipt)) {
+    const counts = revealExecutionCounts(receipt);
+    const acceptedCount = counts && counts.submitted === round.pending_reveal_answer_count
+      ? Math.min(30, round.reveal_answer_count + counts.newlyRevealed)
+      : round.pending_reveal_answer_count ?? round.reveal_answer_count;
     const { error: updateError } = await db.from("landmark_game_rounds").update({
       status: "revealed",
       consensus_status: statusName(receipt),
-      reveal_answer_count: round.pending_reveal_answer_count ?? round.reveal_answer_count,
+      reveal_answer_count: acceptedCount,
       pending_reveal_answer_count: null,
       reveal_confirmed_at: new Date().toISOString(),
       next_check_at: null,
@@ -978,7 +983,7 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
       const answer = player
         ? (await db
           .from("landmark_game_answers")
-          .select("choice_index,submitted_at,commit_transaction_hash")
+          .select("choice_index,commit_verified_at")
           .eq("round_id", round.id)
           .eq("player_id", player.id)
           .maybeSingle()).data
@@ -994,7 +999,7 @@ async function gameState(db: DatabaseClient, gameId: string, playerId: string | 
           ? new Date(Date.parse(round.ends_at) + 45_000).toISOString()
           : null,
         revealDeadline: round.reveal_deadline,
-        selectedIndex: answer?.choice_index ?? null,
+        selectedIndex: answer?.commit_verified_at ? answer.choice_index : null,
       };
     }
   }
@@ -1429,22 +1434,70 @@ Deno.serve(async (request: Request) => {
         return json({ error: "The round result is already final." }, 409);
       }
       const { data: existing } = await db.from("landmark_game_answers")
-        .select("id,commitment,choice_index")
+        .select("id,commitment,choice_index,commit_transaction_hash,commit_verified_at")
         .eq("round_id", round.id)
         .eq("player_id", player.id)
         .maybeSingle();
       if (existing) {
-        if (existing.commitment !== commitment || existing.choice_index !== choiceIndex) {
+        if (existing.commitment !== commitment || existing.choice_index !== choiceIndex
+          || (!existing.commit_verified_at && existing.commit_transaction_hash !== commitTransactionHash)) {
           return json({ error: "Answer already locked." }, 409);
         }
-        return json({ accepted: true, roundId: round.id, selectedIndex: choiceIndex });
+        if (existing.commit_verified_at) {
+          return json({ accepted: true, roundId: round.id, selectedIndex: choiceIndex });
+        }
+      }
+      if (Date.now() > Date.parse(round.reveal_deadline)) {
+        return json({ error: "The answer reveal window has closed." }, 409);
+      }
+      const stagedAnswer = usesTwoStepActivation(game);
+      if (stagedAnswer && !existing) {
+        // Queue the signed preimage before the finalized commitment read, which
+        // can lag under a large player burst. The contract still accepts a
+        // reveal only when it matches that player's onchain commitment.
+        const { error: stageError } = await db.from("landmark_game_answers").insert({
+          game_id: game.id,
+          round_id: round.id,
+          player_id: player.id,
+          choice_index: choiceIndex,
+          elapsed_ms: 0,
+          signer_address: signerAddress,
+          commitment,
+          commit_transaction_hash: commitTransactionHash,
+          reveal_salt: revealSalt,
+        });
+        if (stageError) {
+          if (stageError.code === "23505") return json({ error: "Answer is still confirming onchain." }, 503);
+          throw stageError;
+        }
       }
       const commitStatus = await signedCommitStatus(
         game, round as RoundRow, signerAddress, commitTransactionHash, commitment,
       );
       if (commitStatus === "pending") return json({ error: "Answer is still confirming onchain." }, 503);
-      if (commitStatus === "late") return json({ error: "Answer was too late onchain." }, 409);
-      if (commitStatus === "invalid") return json({ error: "Answer did not confirm onchain." }, 409);
+      if (commitStatus === "late" || commitStatus === "invalid") {
+        if (stagedAnswer) {
+          const { error: deleteError } = await db.from("landmark_game_answers")
+            .delete()
+            .eq("round_id", round.id)
+            .eq("player_id", player.id)
+            .eq("commitment", commitment)
+            .is("commit_verified_at", null);
+          if (deleteError) throw deleteError;
+        }
+        return json({ error: commitStatus === "late"
+          ? "Answer was too late onchain."
+          : "Answer did not confirm onchain." }, 409);
+      }
+      if (stagedAnswer) {
+        const { error: confirmError } = await db.from("landmark_game_answers")
+          .update({ commit_verified_at: new Date().toISOString() })
+          .eq("round_id", round.id)
+          .eq("player_id", player.id)
+          .eq("commitment", commitment);
+        if (confirmError) throw confirmError;
+        return json({ accepted: true, roundId: round.id, selectedIndex: choiceIndex });
+      }
       const { error } = await db.from("landmark_game_answers").insert({
         game_id: game.id,
         round_id: round.id,
@@ -1453,11 +1506,8 @@ Deno.serve(async (request: Request) => {
         elapsed_ms: 0,
         signer_address: signerAddress,
         commitment,
-        // New contracts prove sender, commitment, and timestamp directly in
-        // finalized storage. An unverified client-provided hash is not evidence.
-        commit_transaction_hash: usesTwoStepActivation(game)
-          ? null
-          : commitTransactionHash,
+        commit_transaction_hash: commitTransactionHash,
+        commit_verified_at: new Date().toISOString(),
         reveal_salt: revealSalt,
       });
       if (error) {

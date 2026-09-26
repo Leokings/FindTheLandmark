@@ -6,6 +6,7 @@ import {
   hasGenuineConsensus,
   hasSuccessfulFinalizedExecution,
   isTerminal,
+  revealExecutionCounts,
   signedCommitResult,
   signedCommitStateResult,
   statusName,
@@ -83,6 +84,17 @@ test("extracts a finalized rollback reason", () => {
 test("normalizes numeric status codes", () => {
   assert.equal(statusName({ status: 7 }), "FINALIZED");
   assert.equal(statusName({ status_code: "5" }), "ACCEPTED");
+});
+
+test("counts only reveals accepted by the contract, not the submitted batch size", () => {
+  const receipt = finalizedReceipt();
+  receipt.consensus_data.leader_receipt[0].result = {
+    status: "return",
+    payload: { readable: '{"game_id":"game-test""newly_revealed":7"round_index":3"submitted":30}' },
+  };
+  assert.deepEqual(revealExecutionCounts(receipt), { submitted: 30, newlyRevealed: 7 });
+  receipt.consensus_data.leader_receipt[0].result.payload.readable = '{"newly_revealed":31"submitted":30}';
+  assert.equal(revealExecutionCounts(receipt), null);
 });
 
 test("a signed answer is confirmed only with its own successful onchain commit and timestamp", () => {

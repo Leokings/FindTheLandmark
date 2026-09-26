@@ -60,6 +60,26 @@ function leaderReceipt(receipt: unknown) {
   return leader && typeof leader === "object" ? leader as Record<string, unknown> : null;
 }
 
+export function revealExecutionCounts(receipt: unknown) {
+  const result = leaderReceipt(receipt)?.result;
+  const payload = result && typeof result === "object"
+    ? (result as Record<string, unknown>).payload
+    : null;
+  const readable = payload && typeof payload === "object"
+    ? (payload as Record<string, unknown>).readable
+    : null;
+  if (typeof readable !== "string") return null;
+  // GenLayer's receipt formatter omits commas between returned dict fields,
+  // so extract the two integer fields rather than JSON-parsing it.
+  const submitted = /"submitted"\s*:\s*(\d+)/.exec(readable);
+  const newlyRevealed = /"newly_revealed"\s*:\s*(\d+)/.exec(readable);
+  if (!submitted || !newlyRevealed) return null;
+  const submittedCount = Number(submitted[1]);
+  const newlyRevealedCount = Number(newlyRevealed[1]);
+  if (submittedCount > 30 || newlyRevealedCount > submittedCount) return null;
+  return { submitted: submittedCount, newlyRevealed: newlyRevealedCount };
+}
+
 export function hasSuccessfulFinalizedExecution(receipt: unknown) {
   if (statusName(receipt) !== "FINALIZED") return false;
   const leaderRecord = leaderReceipt(receipt);
